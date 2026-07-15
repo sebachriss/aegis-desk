@@ -13,6 +13,11 @@ PROVIDERS = {
         "model": settings.deepinfra_model,
         "api_key": settings.deepinfra_api_key,
     },
+    "groq": {
+        "base_url": settings.groq_base_url,
+        "model": settings.groq_model,
+        "api_key": settings.groq_api_key,
+    },
 }
 
 
@@ -59,4 +64,29 @@ def get_llm(
         temperature=temp_final,
         max_tokens=tokens_final,
         streaming=streaming,
+    )
+
+
+def get_fast_llm(
+    provider: str = "groq",
+    model: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int = 256,
+) -> ChatOpenAI:
+    """Crea un ChatOpenAI con el modelo rápido de Groq (Llama-3.1-8B-Instant).
+
+    Usado por nodos livianos: supervisor (clasificación) y crítico (evaluación).
+    Groq usa chips LPU — ~10x más rápido que GPU. Free tier: 30 req/min.
+
+    Args:
+        provider: Nombre del proveedor. Default "groq".
+        model: Modelo específico. Si es None, usa el default de Groq.
+        temperature: Creatividad. Default 0 para respuestas deterministas.
+        max_tokens: Máximo de tokens. Default 256 (suficiente para JSON pequeño).
+    """
+    return get_llm(
+        provider=provider,
+        model=model or settings.groq_model,
+        temperature=temperature if temperature is not None else 0,
+        max_tokens=max_tokens,
     )

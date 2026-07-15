@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from src.agents.state import AgentState
-from src.llm.providers import get_llm
+from src.llm.providers import get_fast_llm
 
 MAX_RETRIES = 2
 
@@ -44,6 +44,8 @@ Criterios:
 
 Si la respuesta es buena, confidence alta (>= 0.7) y necesita_reintento = False.
 Si la respuesta es incompleta, incorrecta, o no responde la pregunta, confidence baja y necesita_reintento = True.
+
+Responde en formato JSON con los campos: confidence, razon, necesita_reintento.
 """
 
 
@@ -55,8 +57,8 @@ def critic_node(state: AgentState) -> dict:
     - Si es mala y hay retries disponibles: marcar para reintento.
     - Si es mala y no hay retries: marcar para revisión humana.
     """
-    llm = get_llm(temperature=0)
-    llm_estructurado = llm.with_structured_output(EvaluacionCritico)
+    llm = get_fast_llm(model="llama-3.3-70b-versatile")
+    llm_estructurado = llm.with_structured_output(EvaluacionCritico, method="function_calling")
 
     query = state["query"]
     respuesta = state["respuesta"]

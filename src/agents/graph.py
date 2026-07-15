@@ -65,6 +65,20 @@ def route_from_supervisor(state: AgentState) -> str:
     return routing.get(intencion, "chat_agent")
 
 
+def route_from_worker(state: AgentState) -> str:
+    """Edge condicional después del worker: decide si necesita crítico o va directo a END.
+
+    - Si intención es 'chat' y confidence >= 0.9: respuesta directa, sin crítico (ahorra ~3s)
+    - Resto: pasa por crítico para evaluación de calidad
+    """
+    intencion = state.get("intencion", "chat")
+    confidence = state.get("confidence", 1.0)
+
+    if intencion == "chat" and confidence >= 0.9:
+        return END
+    return "critic"
+
+
 def route_from_critic(state: AgentState) -> str:
     """Edge condicional: decide si la respuesta es final, necesita reintento, o HITL.
 
@@ -79,12 +93,23 @@ def route_from_critic(state: AgentState) -> str:
     retries = state.get("retries", 0)
     intencion = state.get("intencion", "chat")
 
-    # Si el crítico marcó revisión humana explícita
-    if requires_human:
-        return "hitl_review"
-
-    # Acciones sensibles siempre pasan por HITL (incluso con confidence alta)
+    # Solo acciones sensibles van a HITL (ej: enviar email)
+    # Tickets (crear/listar/buscar) son acciones rutinarias que no necesitan aprobación
+    # Este check va ANTES del requires_human porque el crítico puede marcar
+    # revisión para acciones por precaución, pero los tickets no la necesitan
     if intencion == "accion" and confidence >= 0.7:
+        respuesta = state.get("respuesta", "").lower()
+        email_action_patterns = [
+            "email enviado", "correo enviado", "enviado a", "he enviado",
+            "enviado correctamente", "enviado exitosamente",
+            "email ha sido enviado", "correo ha sido enviado",
+        ]
+        if any(p in respuesta for p in email_action_patterns):
+            return "hitl_review"
+        return END
+
+    # Si el crítico marcó revisión humana explícita (y no es acción rutinaria)
+    if requires_human:
         return "hitl_review"
 
     # Si la confianza es alta (y no es accion), la respuesta es buena
@@ -155,11 +180,18 @@ def build_graph(checkpointer=None):
         },
     )
 
-    # Cada worker → crítico
+    # Cada worker → crítico (excepto chat simple que puede ir directo a END)
     graph.add_edge("rag_agent", "critic")
     graph.add_edge("data_agent", "critic")
     graph.add_edge("action_agent", "critic")
-    graph.add_edge("chat_agent", "critic")
+    graph.add_conditional_edges(
+        "chat_agent",
+        route_from_worker,
+        {
+            "critic": "critic",
+            END: END,
+        },
+    )
 
     # crítico → (condicional) → END, worker (reintento), o hitl_review
     graph.add_conditional_edges(

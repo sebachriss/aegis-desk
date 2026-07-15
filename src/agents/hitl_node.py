@@ -20,6 +20,9 @@ def hitl_node(state: AgentState) -> dict:
     LangGraph guarda el estado y pausa. Cuando el humano responde
     con Command(resume=...), el grafo continúa desde aquí.
 
+    Solo pausa para acciones sensibles (email). Tickets pasan directo
+    sin aprobación.
+
     Returns:
         Diccionario con la decisión del humano:
         - approved: True/False
@@ -28,6 +31,22 @@ def hitl_node(state: AgentState) -> dict:
     query = state["query"]
     respuesta = state.get("respuesta", "")
     intencion = state.get("intencion", "")
+
+    # Solo pausar para acciones sensibles (envío de email/correo)
+    # Tickets (crear/listar/buscar) no necesitan aprobación humana
+    # Buscar verbos de acción de email, no la palabra "email" suelta
+    # (puede aparecer en títulos de tickets: "Email no llega")
+    respuesta_lower = respuesta.lower()
+    email_action_patterns = [
+        "email enviado", "correo enviado", "enviado a", "he enviado",
+        "enviado correctamente", "enviado exitosamente",
+        "email ha sido enviado", "correo ha sido enviado",
+    ]
+    if not any(p in respuesta_lower for p in email_action_patterns):
+        return {
+            "respuesta": respuesta,
+            "requires_human_review": False,
+        }
 
     # Construir el resumen de lo que el agente quiere hacer
     resumen = f"""
