@@ -1,6 +1,7 @@
 """Streamlit UI para Aegis Desk.
 
-Tres vistas:
+Vistas:
+  0. Login — autenticar usuario y obtener JWT token
   1. Chat — conversar con el agente
   2. Aprobaciones HITL — aprobar/rechazar acciones pendientes
   3. Dashboard — métricas de tracing
@@ -24,17 +25,13 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- Sidebar ---
-
-st.sidebar.title("🛡️ Aegis Desk")
-st.sidebar.caption("Soporte interno inteligente")
-
-vista = st.sidebar.radio(
-    "Navegación",
-    ["💬 Chat", "✅ Aprobaciones HITL", "📊 Dashboard"],
-)
-
 # --- Session state ---
+
+if "token" not in st.session_state:
+    st.session_state.token = None
+
+if "user" not in st.session_state:
+    st.session_state.user = None
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -42,26 +39,83 @@ if "messages" not in st.session_state:
 if "pending_hitl" not in st.session_state:
     st.session_state.pending_hitl = []
 
-if "user_id" not in st.session_state:
-    st.session_state.user_id = "ui_user"
 
-if "role" not in st.session_state:
-    st.session_state.role = "empleado"
+def api_headers():
+    """Devuelve headers con token JWT si hay sesión activa."""
+    headers = {}
+    if st.session_state.token:
+        headers["Authorization"] = f"Bearer {st.session_state.token}"
+    return headers
+
+
+# --- Login ---
+
+if not st.session_state.token:
+    st.title("🛡️ Aegis Desk — Login")
+    st.caption("Plataforma de soporte interno inteligente")
+
+    with st.form("login_form"):
+        username = st.text_input("Usuario", placeholder="ana.garcia")
+        password = st.text_input("Contraseña", type="password")
+        submitted = st.form_submit_button("Iniciar sesión")
+
+        if submitted:
+            try:
+                resp = requests.post(
+                    f"{API_URL}/login",
+                    json={"username": username, "password": password},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    st.session_state.token = data["access_token"]
+                    st.session_state.user = {
+                        "username": username,
+                        "role": data["role"],
+                        "display_name": data["display_name"],
+                    }
+                    st.success(f"Bienvenido, {data['display_name']}!")
+                    st.rerun()
+                else:
+                    st.error("❌ Usuario o contraseña incorrectos")
+            except requests.exceptions.ConnectionError:
+                st.error("❌ No se pudo conectar a la API. ¿Está corriendo `uvicorn src.api.main:app --port 8000`?")
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+
+    with st.expander("Usuarios de prueba"):
+        st.write("| Usuario | Password | Rol |")
+        st.write("|---|---|---|")
+        st.write("| ana.garcia | ana123 | empleado |")
+        st.write("| carlos.lopez | carlos123 | empleado |")
+        st.write("| admin.aegis | admin123 | admin |")
+
+    st.stop()
+
+
+# --- Sidebar ---
+
+st.sidebar.title("🛡️ Aegis Desk")
+st.sidebar.caption(f"Sesión: {st.session_state.user['display_name']}")
+st.sidebar.write(f"Rol: **{st.session_state.user['role']}**")
+
+if st.sidebar.button("Cerrar sesión"):
+    st.session_state.token = None
+    st.session_state.user = None
+    st.session_state.messages = []
+    st.session_state.pending_hitl = []
+    st.rerun()
+
+vista = st.sidebar.radio(
+    "Navegación",
+    ["💬 Chat", "✅ Aprobaciones HITL", "📊 Dashboard"],
+)
 
 
 # --- Vista: Chat ---
 
 if vista == "💬 Chat":
     st.title("💬 Chat con Aegis")
-
-    # Configuración de usuario
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.session_state.user_id = st.text_input("User ID", value=st.session_state.user_id)
-    with col2:
-        st.session_state.role = st.selectbox("Rol", ["empleado", "admin"], index=0)
-
-    st.divider()
 
     # Historial de mensajes
     for msg in st.session_state.messages:
@@ -84,13 +138,13 @@ if vista == "💬 Chat":
                 try:
                     resp = requests.post(
                         f"{API_URL}/chat",
-                        json={
-                            "query": prompt,
-                            "user_id": st.session_state.user_id,
-                            "role": st.session_state.role,
-                        },
+                        json={"query": prompt},
+                        headers=api_headers(),
                         timeout=120,
                     )
+                    if resp.status_code == 401:
+                        st.error("❌ Sesión expirada. Cierra sesión y vuelve a iniciar.")
+                        st.stop()
                     data = resp.json()
                 except requests.exceptions.ConnectionError:
                     st.error("❌ No se pudo conectar a la API. ¿Está corriendo `uvicorn src.api.main:app --port 8000`?")
@@ -133,7 +187,9 @@ if vista == "💬 Chat":
 elif vista == "✅ Aprobaciones HITL":
     st.title("✅ Aprobaciones Pendientes")
 
-    if not st.session_state.pending_hitl:
+    if st.session_state.user["role"] != "admin":
+        st.warning("⚠️ Solo los administradores pueden aprobar/rechazar acciones.")
+    elif not st.session_state.pending_hitl:
         st.info("No hay acciones pendientes de aprobación.")
     else:
         for i, item in enumerate(st.session_state.pending_hitl):
@@ -149,10 +205,14 @@ elif vista == "✅ Aprobaciones HITL":
                         try:
                             resp = requests.post(
                                 f"{API_URL}/hitl/{item['thread_id']}/approve",
+                                headers=api_headers(),
                                 timeout=60,
                             )
-                            data = resp.json()
-                            st.success(f"Aprobado: {data.get('respuesta', '')[:100]}")
+                            if resp.status_code == 403:
+                                st.error("❌ No tienes permisos de admin.")
+                            else:
+                                data = resp.json()
+                                st.success(f"Aprobado: {data.get('respuesta', '')[:100]}")
                         except Exception as e:
                             st.error(f"Error: {e}")
 
@@ -165,10 +225,14 @@ elif vista == "✅ Aprobaciones HITL":
                         try:
                             resp = requests.post(
                                 f"{API_URL}/hitl/{item['thread_id']}/reject",
+                                headers=api_headers(),
                                 timeout=60,
                             )
-                            data = resp.json()
-                            st.warning(f"Rechazado: {data.get('respuesta', '')[:100]}")
+                            if resp.status_code == 403:
+                                st.error("❌ No tienes permisos de admin.")
+                            else:
+                                data = resp.json()
+                                st.warning(f"Rechazado: {data.get('respuesta', '')[:100]}")
                         except Exception as e:
                             st.error(f"Error: {e}")
 
@@ -183,7 +247,7 @@ elif vista == "📊 Dashboard":
     st.title("📊 Dashboard de Métricas")
 
     try:
-        resp = requests.get(f"{API_URL}/stats", timeout=10)
+        resp = requests.get(f"{API_URL}/stats", headers=api_headers(), timeout=10)
         stats = resp.json()
     except requests.exceptions.ConnectionError:
         st.error("❌ No se pudo conectar a la API. ¿Está corriendo?")
