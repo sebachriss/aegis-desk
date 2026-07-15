@@ -10,3 +10,6 @@ sentence-transformers>=3.0.0
 
 # Fase 3 — Tool Calling y Agentes
 langgraph>=0.2.0
+
+# Fase 6 — HITL (MemorySaver checkpointer)
+langgraph-checkpoint-memory>=2.0.0
