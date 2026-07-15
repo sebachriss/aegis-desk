@@ -64,4 +64,11 @@
   - `scripts/test_tracing.py` — prueba de tracing
   - Fix: supervisor prompt mejorado (tickets → accion, no datos)
   - Resultado: 32/33 pass (97%), score promedio 0.970
-- **Siguiente paso**: Fase 8 — API, UI y Deploy.
+- **Fase 8 completada**:
+  - `src/api/main.py` — FastAPI: /chat, /hitl/{id}/approve, /hitl/{id}/reject, /stats, /health
+  - `ui/app.py` — Streamlit: Chat, Aprobaciones HITL, Dashboard de métricas
+  - `Dockerfile` — imagen Python 3.11-slim
+  - `docker-compose.yml` — API (8000) + UI (8501) con volúmenes
+  - requirements: fastapi, uvicorn, streamlit, httpx
+  - API probada: chat, HITL approve, HITL reject, stats — todo funcional
+- **Siguiente paso**: Fase 9 — Red Teaming Final.
