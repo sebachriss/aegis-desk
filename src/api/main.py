@@ -1,29 +1,37 @@
 """FastAPI app para Aegis Desk.
 
 Endpoints:
-  POST /chat          — enviar mensaje (devuelve respuesta + metadata)
-  GET  /chat/stream   — streaming SSE (token por token)
+  POST /login         — autenticar usuario y obtener JWT token
+  POST /chat          — enviar mensaje (requiere auth)
   GET  /hitl/pending  — listar threads con HITL pendiente
-  POST /hitl/{thread_id}/approve — aprobar acción pendiente
-  POST /hitl/{thread_id}/reject  — rechazar acción pendiente
+  POST /hitl/{thread_id}/approve — aprobar acción pendiente (requiere auth admin)
+  POST /hitl/{thread_id}/reject  — rechazar acción pendiente (requiere auth admin)
   GET  /stats         — estadísticas de tracing
   GET  /health        — health check
+  GET  /me            — info del usuario autenticado
 
+Auth: JWT token en header Authorization: Bearer <token>
 HITL usa MemorySaver checkpointer con thread_id por conversación.
 """
 
 import time
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel
 
 from src.agents.graph import build_graph
+from src.auth.jwt_handler import create_access_token, get_current_user, verify_token
+from src.auth.users import authenticate, get_user
+from src.observability.langsmith import setup_langsmith_tracing
 from src.observability.tracing import get_stats, trace_execution
 from src.security.rate_limiter import reset_user
+
+# Habilitar LangSmith tracing si hay API key configurada
+_langsmith_enabled = setup_langsmith_tracing()
 
 # --- Setup ---
 
@@ -50,8 +58,6 @@ _graph = build_graph(checkpointer=_checkpointer)
 
 class ChatRequest(BaseModel):
     query: str
-    user_id: str = "api_user"
-    role: str = "empleado"
 
 
 class ChatResponse(BaseModel):
@@ -64,8 +70,46 @@ class ChatResponse(BaseModel):
     requires_hitl: bool
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str
+    display_name: str
+
+
 class HITLDecision(BaseModel):
     decision: str  # "approve" o "reject"
+
+
+# --- Auth dependency ---
+
+
+async def get_auth_user(authorization: str | None = Header(default=None)) -> dict:
+    """Dependency que extrae y verifica el usuario del JWT token.
+
+    Raises HTTPException 401 si no hay token o es inválido.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Falta token de autenticación")
+
+    token = authorization.split(" ", 1)[1]
+    user = get_current_user(token)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Token inválido o expirado")
+
+    return user
+
+
+async def require_admin(user: dict = Depends(get_auth_user)) -> dict:
+    """Dependency que requiere rol admin."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol admin")
+    return user
 
 
 # --- Endpoints ---
@@ -73,17 +117,45 @@ class HITLDecision(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "aegis-desk"}
+    return {
+        "status": "ok",
+        "service": "aegis-desk",
+        "langsmith_tracing": _langsmith_enabled,
+    }
+
+
+@app.post("/login", response_model=LoginResponse)
+async def login(req: LoginRequest):
+    """Autentica un usuario y devuelve un JWT token."""
+    user = authenticate(req.username, req.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+
+    token = create_access_token(user)
+    return LoginResponse(
+        access_token=token,
+        role=user["role"],
+        display_name=user["display_name"],
+    )
+
+
+@app.get("/me")
+async def me(user: dict = Depends(get_auth_user)):
+    """Devuelve info del usuario autenticado."""
+    return user
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, user: dict = Depends(get_auth_user)):
     """Envía un mensaje al agente y devuelve la respuesta.
 
+    Requiere autenticación JWT. El rol se extrae del token, no del request.
     Si el grafo se pausa en HITL, devuelve requires_hitl=True
     y el thread_id para aprobar/rechazar después.
     """
-    reset_user(req.user_id)
+    user_id = user["username"]
+    role = user["role"]
+    reset_user(user_id)
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
@@ -92,8 +164,8 @@ async def chat(req: ChatRequest):
     result = _graph.invoke({
         "messages": [],
         "query": req.query,
-        "user_id": req.user_id,
-        "role": req.role,
+        "user_id": user_id,
+        "role": role,
         "intencion": "",
         "respuesta": "",
         "fuentes": [],
@@ -126,8 +198,8 @@ async def chat(req: ChatRequest):
         fuentes=result.get("fuentes", []),
         retries=result.get("retries", 0),
         elapsed_seconds=elapsed,
-        user_id=req.user_id,
-        role=req.role,
+        user_id=user_id,
+        role=role,
     )
 
     return ChatResponse(
@@ -155,8 +227,8 @@ async def hitl_pending():
 
 
 @app.post("/hitl/{thread_id}/approve")
-async def hitl_approve(thread_id: str):
-    """Aprueba una acción pausada en HITL."""
+async def hitl_approve(thread_id: str, user: dict = Depends(require_admin)):
+    """Aprueba una acción pausada en HITL. Requiere rol admin."""
     config = {"configurable": {"thread_id": thread_id}}
 
     try:
@@ -173,8 +245,8 @@ async def hitl_approve(thread_id: str):
 
 
 @app.post("/hitl/{thread_id}/reject")
-async def hitl_reject(thread_id: str):
-    """Rechaza una acción pausada en HITL."""
+async def hitl_reject(thread_id: str, user: dict = Depends(require_admin)):
+    """Rechaza una acción pausada en HITL. Requiere rol admin."""
     config = {"configurable": {"thread_id": thread_id}}
 
     try:

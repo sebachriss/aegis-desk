@@ -32,6 +32,26 @@ class Settings(BaseSettings):
         description="Máximo de tokens a generar por respuesta",
     )
 
+    # JWT secret para auth (opcional, default para demo)
+    jwt_secret: str = Field(
+        default="aegis-desk-demo-secret-change-in-production",
+        description="Secret para firmar JWT tokens",
+    )
+
+    # LangSmith (opcional — si no está seteado, tracing local)
+    langsmith_api_key: str = Field(
+        default="",
+        description="API key de LangSmith para tracing visual",
+    )
+    langsmith_project: str = Field(
+        default="aegis-desk",
+        description="Nombre del proyecto en LangSmith",
+    )
+    langsmith_tracing: bool = Field(
+        default=False,
+        description="Habilitar tracing de LangSmith",
+    )
+
     # Configuración de pydantic-settings
     model_config = SettingsConfigDict(
         env_file=".env",
