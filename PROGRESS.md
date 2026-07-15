@@ -1,0 +1,58 @@
+# Aegis Desk — Bitácora de Progreso
+
+## 2026-07-14
+- Proyecto definido. Plan maestro creado en `PLAN.md`.
+- Stack decidido: DeepInfra (DeepSeek-V4-Flash) + Groq, LangChain/LangGraph, FastAPI, Chroma, Streamlit.
+- **Fase 0 completada**:
+  - Estructura base + venv + requirements.txt
+  - .env con API key real + .env.example
+  - src/config.py con pydantic-settings
+  - Primera llamada exitosa a DeepSeek-V4-Flash vía DeepInfra
+  - Tokens: input=13, output=153, total=166
+- **Fase 1 completada**:
+  - `src/llm/providers.py` — `get_llm()` con abstracción multi-proveedor
+  - Streaming con `.stream()` (token por token en tiempo real)
+  - Structured outputs con Pydantic (`with_structured_output`)
+  - `src/memory/short_term.py` — `ChatMemory` con ventana deslizante
+  - `src/observability/metrics.py` — tokens, costo, latencia, tok/s
+  - `scripts/cli_chat.py` — CLI interactivo integrando todo
+  - Scripts de prueba: test_llm, test_streaming, test_structured, test_memory, test_metrics
+- **Fase 2 completada**:
+  - Documentos ficticios: politica_rrhh.md, manual_it.md, faq.md
+  - `src/rag/ingest.py` — chunking por Markdown headers + embeddings locales + Chroma
+  - `src/rag/retriever.py` — búsqueda por similitud semántica (singleton)
+  - `src/rag/chain.py` — cadena RAG con prompt de citas de fuente
+  - `scripts/test_rag.py` — 4/4 preguntas correctas (incluyendo "no sé" cuando no está en docs)
+  - Fix: MarkdownHeaderTextSplitter mejoró precisión del retriever (14→22 chunks, secciones limpias)
+- **Fase 3 completada**:
+  - `src/tools/tickets.py` — crear/listar/buscar tickets (simulado, @tool)
+  - `src/tools/email.py` — enviar email (simulado, @tool)
+  - `src/tools/sql.py` — consultar SQL sobre SQLite (solo SELECT, allowlist, @tool)
+  - `src/tools/registry.py` — registro central de herramientas
+  - `src/agents/react_agent.py` — agente ReAct con function calling nativo (LangGraph)
+  - `scripts/test_agent.py` — 4/4 preguntas correctas con traza de tool calls
+- **Fase 4 completada**:
+  - `src/agents/state.py` — AgentState (TypedDict) con estado compartido
+  - `src/agents/supervisor.py` — clasifica intención con Literal["rag","datos","accion","chat"]
+  - `src/agents/rag_agent.py` — worker RAG (reutiliza chain.py)
+  - `src/agents/data_agent.py` — worker SQL (ReAct con consultar_sql)
+  - `src/agents/action_agent.py` — worker acciones (ReAct con tickets + email)
+  - `src/agents/chat_agent.py` — worker fallback (LLM puro)
+  - `src/agents/critic_agent.py` — evalúa respuestas, loop de reintento (max 2)
+  - `src/agents/graph.py` — grafo LangGraph con conditional edges
+  - `scripts/test_multi_agent.py` — 4/4 correctas, grafo visualizado en Mermaid
+- **Fase 5 completada**:
+  - `src/security/prompt_injection.py` — detección con regex + sanitize_input
+  - `src/security/rbac.py` — roles empleado/admin con permisos de tools e intenciones
+  - `src/security/rate_limiter.py` — ventana deslizante 10 req/60s
+  - `src/security/pii_filter.py` — enmascara emails, teléfonos, DNIs, datos sensibles
+  - `src/agents/security_node.py` — guardrails antes del supervisor (injection + rate limit)
+  - Grafo actualizado: START → security → supervisor → workers → critic → END
+  - `src/agents/chat_agent.py` — maneja acceso denegado por RBAC
+  - `scripts/test_security.py` — 5/5 tests pasados
+- **Fase 6 completada**:
+  - `src/agents/hitl_node.py` — nodo HITL con interrupt() de LangGraph
+  - Grafo actualizado: crítico → hitl_review → END (acciones siempre revisadas)
+  - `build_graph(checkpointer)` — soporte para MemorySaver (pausar/reanudar)
+  - `scripts/test_hitl.py` — 3/3 tests (aprobar, rechazar, no-pausar RAG)
+- **Siguiente paso**: Fase 7 — Evals (dataset de test, métricas de calidad, regresión).
