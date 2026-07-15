@@ -11,9 +11,9 @@ from collections import defaultdict
 _requests: dict[str, list[float]] = defaultdict(list)
 
 # Configuración
-MAX_REQUESTS = 10       # máximo de requests
-WINDOW_SECONDS = 60     # en una ventana de 60 segundos
-COOLDOWN_SECONDS = 60   # si se excede, esperar 60s antes de permitir más
+MAX_REQUESTS = 10        # máximo de requests
+WINDOW_SECONDS = 120     # en una ventana de 120 segundos
+COOLDOWN_SECONDS = 60    # si se excede, esperar 60s antes de permitir más
 
 
 def check_rate_limit(user_id: str) -> dict:
