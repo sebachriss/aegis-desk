@@ -55,4 +55,13 @@
   - Grafo actualizado: crítico → hitl_review → END (acciones siempre revisadas)
   - `build_graph(checkpointer)` — soporte para MemorySaver (pausar/reanudar)
   - `scripts/test_hitl.py` — 3/3 tests (aprobar, rechazar, no-pausar RAG)
-- **Siguiente paso**: Fase 7 — Evals (dataset de test, métricas de calidad, regresión).
+- **Fase 7 completada**:
+  - `evals/datasets/test_cases.json` — 33 casos (10 RAG, 8 datos, 5 accion, 4 chat, 6 adversarial)
+  - `evals/judges.py` — LLM-as-judge con score 0-1 + categoría (correcta/parcial/incorrecta/rechazada)
+  - `evals/rag_evals.py` — métricas RAG: faithfulness, answer relevance, context precision
+  - `evals/run_evals.py` — runner con reporte por categoría, auto-aprobar HITL, guardar resultados
+  - `src/observability/tracing.py` — traces en JSONL, stats agregadas (confidence, tiempo, intención)
+  - `scripts/test_tracing.py` — prueba de tracing
+  - Fix: supervisor prompt mejorado (tickets → accion, no datos)
+  - Resultado: 32/33 pass (97%), score promedio 0.970
+- **Siguiente paso**: Fase 8 — API, UI y Deploy.

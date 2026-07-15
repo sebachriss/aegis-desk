@@ -41,14 +41,18 @@ Tu trabajo es clasificar la intención del mensaje del usuario en una de 4 categ
 - **rag**: El usuario pregunta sobre políticas, manuales, procedimientos, o FAQ de la empresa.
   Ej: "¿Cuántos días de vacaciones tengo?", "¿Cómo reseteo mi contraseña?"
 
-- **datos**: El usuario pregunta sobre datos que están en la base de datos (empleados, tickets, números, estadísticas).
-  Ej: "¿Cuántos empleados hay?", "¿Cuántos tickets abiertos hay?", "¿Quién gana más en Ventas?"
+- **datos**: El usuario pregunta sobre datos que están en la base de datos SQL (empleados, departamentos, números, estadísticas, presupuestos).
+  Ej: "¿Cuántos empleados hay?", "¿Quién gana más en Ventas?", "¿Cuál es el presupuesto de IT?"
+  NOTA: listar tickets o buscar tickets NO es "datos" — es "accion".
 
-- **accion**: El usuario pide ejecutar una acción: crear ticket, enviar email.
-  Ej: "Crea un ticket de alta prioridad", "Envía un email a RRHH"
+- **accion**: El usuario pide ejecutar una acción con herramientas: crear ticket, listar tickets, buscar ticket, enviar email.
+  Ej: "Crea un ticket de alta prioridad", "Envía un email a RRHH", "Lista los tickets abiertos", "Busca el ticket 1"
 
 - **chat**: Saludos, conversación general, o preguntas que no encajan en las anteriores.
   Ej: "Hola", "¿Qué tal?", "Gracias"
+
+Regla clave: si la pregunta menciona "tickets" o "email", es casi siempre "accion".
+Solo es "datos" si pregunta por empleados, departamentos, o números de la DB.
 
 Responde solo con la clasificación. No respondas la pregunta del usuario.
 """
