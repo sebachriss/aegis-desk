@@ -22,6 +22,26 @@ class Settings(BaseSettings):
         description="Nombre del modelo en DeepInfra",
     )
 
+    # Modelo rápido para nodos livianos (supervisor, crítico)
+    deepinfra_fast_model: str = Field(
+        default="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        description="Modelo rápido para clasificación y evaluación",
+    )
+
+    # Groq (free tier) — para nodos livianos: supervisor y crítico
+    groq_api_key: str = Field(
+        default="",
+        description="API key de Groq (free tier, Llama-3.1-8B-Instant)",
+    )
+    groq_base_url: str = Field(
+        default="https://api.groq.com/openai/v1",
+        description="Base URL de la API de Groq",
+    )
+    groq_model: str = Field(
+        default="llama-3.1-8b-instant",
+        description="Modelo rápido de Groq para clasificación y evaluación",
+    )
+
     # Parámetros de generación
     temperature: float = Field(
         default=0.7,

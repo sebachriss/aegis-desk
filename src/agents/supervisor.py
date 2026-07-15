@@ -12,8 +12,29 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+import re
+
 from src.agents.state import AgentState
-from src.llm.providers import get_llm
+from src.llm.providers import get_fast_llm
+
+
+# Patrones de saludos/mensajes triviales que no necesitan LLM para clasificar
+# Security ya filtró prompt injection antes de llegar aquí
+CHAT_PATTERNS = [
+    r"^(hola|buenas|hey|hi|hello|qué tal|que tal|buenos días|buenas tardes|buenas noches)[\s!¡\.?]*$",
+    r"^(gracias|muchas gracias|thanks|thank you|perfecto|genial|ok|vale|entendido)[\s!\.]*$",
+    r"^(adiós|adios|chao|bye|nos vemos|hasta luego|me voy)[\s!\.]*$",
+    r"^(qué puedes hacer|que puedes hacer|ayuda|help)[\s\?¿]*$",
+]
+_compiled_chat = [re.compile(p, re.IGNORECASE) for p in CHAT_PATTERNS]
+
+
+def _is_trivial_chat(query: str) -> bool:
+    """Detecta si el mensaje es un saludo/despedida trivial sin usar LLM."""
+    stripped = query.strip().lower()
+    if len(stripped) > 60:
+        return False
+    return any(p.match(stripped) for p in _compiled_chat)
 
 
 # Schema de salida — el LLM tiene que rellenar esto
@@ -54,7 +75,7 @@ Tu trabajo es clasificar la intención del mensaje del usuario en una de 4 categ
 Regla clave: si la pregunta menciona "tickets" o "email", es casi siempre "accion".
 Solo es "datos" si pregunta por empleados, departamentos, o números de la DB.
 
-Responde solo con la clasificación. No respondas la pregunta del usuario.
+Responde solo con la clasificación en formato JSON. No respondas la pregunta del usuario.
 """
 
 
@@ -63,12 +84,22 @@ def supervisor_node(state: AgentState) -> dict:
 
     Lee state["query"], la clasifica, y devuelve la intención + confidence.
     El grafo usa esto para decidir a qué worker enrutar.
-    """
-    llm = get_llm(temperature=0)
-    llm_estructurado = llm.with_structured_output(ClasificacionSupervisor)
 
-    # El último mensaje del historial es la pregunta del usuario
+    Fast path: si el mensaje es un saludo/despedida trivial, clasifica como
+    'chat' sin llamar al LLM (ahorra ~3s). Security ya filtró injection antes.
+    """
     query = state["query"]
+
+    # Fast path: saludos triviales sin LLM
+    if _is_trivial_chat(query):
+        return {
+            "intencion": "chat",
+            "confidence": 1.0,
+        }
+
+    # Slow path: LLM para clasificar
+    llm = get_fast_llm()
+    llm_estructurado = llm.with_structured_output(ClasificacionSupervisor, method="function_calling")
 
     result = llm_estructurado.invoke([
         SystemMessage(content=SYSTEM_PROMPT),
