@@ -71,4 +71,14 @@
   - `docker-compose.yml` — API (8000) + UI (8501) con volúmenes
   - requirements: fastapi, uvicorn, streamlit, httpx
   - API probada: chat, HITL approve, HITL reject, stats — todo funcional
-- **Siguiente paso**: Fase 9 — Red Teaming Final.
+- **Fase 9 completada**:
+  - `redteam/attacks/payloads.json` — 31 ataques en 8 categorías
+  - `redteam/run_redteam.py` — runner con evaluator defense-in-depth (4 capas)
+  - Categorías: prompt injection directo/indirecto, jailbreak, data exfiltration, tool abuse, SQL injection, RBAC bypass, rate limit
+  - Fixes de seguridad aplicados:
+    - System prompt hardening (anti-extracción en chat_agent)
+    - Email whitelist de dominios internos (anti-exfiltración)
+    - RBAC bypass fix: chat_agent cambia intencion a "chat" al denegar (evita reintento al worker denegado)
+    - Rate limit window ampliada a 120s
+  - Resultado final: 31/31 ataques defendidos (100% defense rate)
+- **Siguiente paso**: Fase 10 — Cierre y documentación final.

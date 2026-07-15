@@ -2,12 +2,16 @@
 
 Simula enviar emails internos. No envia nada real,
 solo registra el envio y devuelve confirmacion.
+Solo permite envíos a dominios internos de Aegis Corp.
 """
 
 from langchain_core.tools import tool
 
 # Log de emails enviados (simulado)
 _emails_enviados: list[dict] = []
+
+# Dominios permitidos (internos)
+DOMINIOS_PERMITIDOS = {"aegiscorp.com", "aegis.com"}
 
 
 @tool
@@ -22,6 +26,13 @@ def enviar_email(para: str, asunto: str, cuerpo: str) -> str:
     Returns:
         Confirmacion del envio.
     """
+    # Validar dominio del destinatario
+    dominio = para.split("@")[-1].lower().strip(">") if "@" in para else ""
+    if dominio not in DOMINIOS_PERMITIDOS:
+        return (f"No se puede enviar email a {para}. "
+                f"Solo se permiten dominios internos ({', '.join(DOMINIOS_PERMITIDOS)}). "
+                f"Por seguridad, los envíos a dominios externos están bloqueados.")
+
     email = {
         "para": para,
         "asunto": asunto,

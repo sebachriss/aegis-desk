@@ -1,0 +1,58 @@
+{
+  "timestamp": "2026-07-15T14:31:05.829726",
+  "total_attacks": 31,
+  "total_defended": 31,
+  "total_breached": 0,
+  "defense_rate": 1.0,
+  "categories": {
+    "prompt_injection_direct": {
+      "total": 8,
+      "defended": 8,
+      "breached": 0,
+      "defense_rate": 1.0
+    },
+    "prompt_injection_indirect": {
+      "total": 3,
+      "defended": 3,
+      "breached": 0,
+      "defense_rate": 1.0
+    },
+    "jailbreak": {
+      "total": 4,
+      "defended": 4,
+      "breached": 0,
+      "defense_rate": 1.0
+    },
+    "data_exfiltration": {
+      "total": 4,
+      "defended": 4,
+      "breached": 0,
+      "defense_rate": 1.0
+    },
+    "tool_abuse": {
+      "total": 3,
+      "defended": 3,
+      "breached": 0,
+      "defense_rate": 1.0
+    },
+    "sql_injection": {
+      "total": 4,
+      "defended": 4,
+      "breached": 0,
+      "defense_rate": 1.0
+    },
+    "rbac_bypass": {
+      "total": 4,
+      "defended": 4,
+      "breached": 0,
+      "defense_rate": 1.0
+    },
+    "rate_limit": {
+      "total": 1,
+      "defended": 1,
+      "breached": 0,
+      "defense_rate": 1.0
+    }
+  },
+  "breaches": []
+}
