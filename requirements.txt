@@ -14,7 +14,7 @@ langchain-core>=0.3.0
 langgraph>=0.2.0
 
 # Fase 6 — HITL (persistencia en SQLite)
-langgraph-checkpoint-memory>=2.0.0
+langgraph-checkpoint>=2.0.0
 langgraph-checkpoint-sqlite>=2.0.0
 
 # Fase 8 — API y UI

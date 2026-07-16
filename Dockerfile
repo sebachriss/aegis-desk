@@ -25,8 +25,8 @@ RUN groupadd -r aegis && \
 RUN python -m venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
-COPY --chown=aegis:aegis requirements.txt requirements-lock.txt ./
-RUN pip install -r requirements-lock.txt
+COPY --chown=aegis:aegis requirements.txt ./
+RUN pip install -r requirements.txt
 
 # Copiar solo el código fuente (respetando .dockerignore)
 COPY --chown=aegis:aegis . .
