@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Check, X, Clock, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { approveHitl, rejectHitl } from "@/lib/api";
@@ -20,17 +20,19 @@ export default function HitlPage() {
   const [pending, setPending] = useState<PendingItem[]>([]);
   const [processing, setProcessing] = useState<string | null>(null);
 
-  const addPending = (item: PendingItem) => {
+  const addPending = useCallback((item: PendingItem) => {
     setPending((prev) => {
       if (prev.some((p) => p.thread_id === item.thread_id)) return prev;
       return [...prev, item];
     });
-  };
+  }, []);
 
   // Expose addPending globally so chat page can add items
-  if (typeof window !== "undefined") {
-    (window as unknown as { __addPending?: (item: PendingItem) => void }).__addPending = addPending;
-  }
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      (window as unknown as { __addPending?: (item: PendingItem) => void }).__addPending = addPending;
+    }
+  }, [addPending]);
 
   const handleApprove = async (threadId: string) => {
     setProcessing(threadId);
