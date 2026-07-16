@@ -1,45 +1,33 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Check, X, Clock, ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { Check, X, Clock, Loader2, ShieldCheck } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth-context";
-import { approveHitl, rejectHitl } from "@/lib/api";
+import { approveHitl, rejectHitl, getHitlPending, type PendingItem } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 
-interface PendingItem {
-  thread_id: string;
-  query: string;
-  intencion: string;
-}
-
 export default function HitlPage() {
   const { user } = useAuth();
-  const [pending, setPending] = useState<PendingItem[]>([]);
+  const queryClient = useQueryClient();
   const [processing, setProcessing] = useState<string | null>(null);
 
-  const addPending = useCallback((item: PendingItem) => {
-    setPending((prev) => {
-      if (prev.some((p) => p.thread_id === item.thread_id)) return prev;
-      return [...prev, item];
-    });
-  }, []);
-
-  // Expose addPending globally so chat page can add items
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      (window as unknown as { __addPending?: (item: PendingItem) => void }).__addPending = addPending;
-    }
-  }, [addPending]);
+  const { data: pending = [], isLoading } = useQuery<PendingItem[]>({
+    queryKey: ["hitl-pending"],
+    queryFn: getHitlPending,
+    refetchInterval: 2000,
+    enabled: user?.role === "admin",
+  });
 
   const handleApprove = async (threadId: string) => {
     setProcessing(threadId);
     try {
       const res = await approveHitl(threadId);
       toast.success(`Aprobado: ${res.respuesta.slice(0, 80)}`);
-      setPending((prev) => prev.filter((p) => p.thread_id !== threadId));
+      queryClient.invalidateQueries({ queryKey: ["hitl-pending"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error al aprobar");
     } finally {
@@ -52,7 +40,7 @@ export default function HitlPage() {
     try {
       const res = await rejectHitl(threadId);
       toast.info(`Rechazado: ${res.respuesta.slice(0, 80)}`);
-      setPending((prev) => prev.filter((p) => p.thread_id !== threadId));
+      queryClient.invalidateQueries({ queryKey: ["hitl-pending"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error al rechazar");
     } finally {
@@ -85,7 +73,14 @@ export default function HitlPage() {
         </p>
       </div>
 
-      {pending.length === 0 ? (
+      {isLoading ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            <p className="mt-4 text-lg font-medium">Cargando aprobaciones...</p>
+          </CardContent>
+        </Card>
+      ) : pending.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted">
@@ -107,6 +102,9 @@ export default function HitlPage() {
                     <CardTitle className="text-base">{item.query}</CardTitle>
                     <CardDescription className="mt-1">
                       Thread: <code className="text-xs">{item.thread_id}</code>
+                      {item.tool_name ? ` · Tool: ${item.tool_name}` : ""}
+                      {item.risk_level ? ` · Riesgo: ${item.risk_level}` : ""}
+                      {item.requested_by ? ` · Solicitante: ${item.requested_by}` : ""}
                     </CardDescription>
                   </div>
                   <Badge variant="secondary">{item.intencion}</Badge>

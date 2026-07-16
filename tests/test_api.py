@@ -38,6 +38,7 @@ class TestAuth:
         assert r.headers.get("retry-after") or r.headers.get("Retry-After")
 
     def test_me_requires_auth(self):
+        client.cookies.clear()
         r = client.get("/me")
         assert r.status_code == 401
 

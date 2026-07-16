@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -61,17 +61,26 @@ app = FastAPI(
 )
 
 # CORS restringido a los origenes configurados
+# En desarrollo se permiten los origenes locales habituales para que funcione
+# el token HttpOnly con credentials. '*' no es compatible con allow_credentials.
 cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-if settings.environment == "production" and not cors_origins:
-    raise RuntimeError("CORS_ORIGINS es obligatorio en produccion")
-if not cors_origins:
-    cors_origins = []
+if settings.environment == "production" and (not cors_origins or cors_origins == ["*"]):
+    raise RuntimeError("CORS_ORIGINS es obligatorio en produccion y no puede ser '*'")
+if not cors_origins or cors_origins == ["*"]:
+    cors_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8501",
+        "http://localhost:8000",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,
+    expose_headers=["Set-Cookie"],
 )
 
 
@@ -79,7 +88,7 @@ app.add_middleware(
 
 
 def _get_hitl_db():
-    """Conexion a la cola HITL persistente. Crea la tabla si no existe."""
+    """Conexion a la cola HITL persistente. Crea la tabla y migra columnas si es necesario."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(HITL_DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -87,6 +96,8 @@ def _get_hitl_db():
         """CREATE TABLE IF NOT EXISTS hitl_queue (
             thread_id TEXT PRIMARY KEY,
             status TEXT NOT NULL DEFAULT "pending",
+            query TEXT,
+            intencion TEXT,
             requested_by TEXT,
             role TEXT,
             tool_name TEXT,
@@ -97,11 +108,22 @@ def _get_hitl_db():
             action_plan_json TEXT
         )"""
     )
+    # Migrar columnas nuevas en bases existentes
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(hitl_queue)")}
+    for col in ("query", "intencion"):
+        if col not in existing_cols:
+            conn.execute(f"ALTER TABLE hitl_queue ADD COLUMN {col} TEXT")
     conn.commit()
     return conn
 
 
-def _enqueue_hitl(thread_id: str, action_plan: dict | None, user: dict):
+def _enqueue_hitl(
+    thread_id: str,
+    query: str,
+    intencion: str,
+    action_plan: dict | None,
+    user: dict,
+):
     """Agrega una solicitud HITL a la cola persistente."""
     db = _get_hitl_db()
     try:
@@ -120,9 +142,22 @@ def _enqueue_hitl(thread_id: str, action_plan: dict | None, user: dict):
             action_plan_json = None
         db.execute(
             """INSERT OR REPLACE INTO hitl_queue
-            (thread_id, status, requested_by, role, tool_name, risk_level, created_at, approved_by, approved_at, action_plan_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (thread_id, "pending", requested_by, role, tool_name, risk_level, now, None, None, action_plan_json),
+            (thread_id, status, query, intencion, requested_by, role, tool_name, risk_level, created_at, approved_by, approved_at, action_plan_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                thread_id,
+                "pending",
+                query,
+                intencion,
+                requested_by,
+                role,
+                tool_name,
+                risk_level,
+                now,
+                None,
+                None,
+                action_plan_json,
+            ),
         )
         db.commit()
     finally:
@@ -148,9 +183,25 @@ def _get_pending_hitl() -> list[dict]:
     db = _get_hitl_db()
     try:
         rows = db.execute(
-            "SELECT * FROM hitl_queue WHERE status = 'pending' ORDER BY created_at ASC"
+            """SELECT thread_id, query, intencion, requested_by, role, tool_name,
+                      risk_level, created_at, action_plan_json
+               FROM hitl_queue
+               WHERE status = 'pending'
+               ORDER BY created_at ASC"""
         ).fetchall()
-        return [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            if not item.get("query") or not item.get("intencion"):
+                # Fallback para entradas antiguas que no tenian query/intencion
+                try:
+                    action_plan = json.loads(item.get("action_plan_json") or "{}")
+                    item.setdefault("query", action_plan.get("query", ""))
+                    item.setdefault("intencion", action_plan.get("intencion", ""))
+                except json.JSONDecodeError:
+                    pass
+            items.append(item)
+        return items
     finally:
         db.close()
 
@@ -221,15 +272,26 @@ class HITLDecision(BaseModel):
 # --- Auth dependency ---
 
 
-async def get_auth_user(authorization: str | None = Header(default=None)) -> dict:
+async def get_auth_user(
+    authorization: str | None = Header(default=None),
+    access_token: str | None = Cookie(default=None),
+) -> dict:
     """Dependency que extrae y verifica el usuario del JWT token.
+
+    El token puede venir en el header Authorization: Bearer <token> o en la
+    cookie HttpOnly `access_token`. Si ambos estan presentes, se usa el header.
 
     Raises HTTPException 401 si no hay token o es invalido.
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    token: str | None = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1]
+    elif access_token:
+        token = access_token
+
+    if not token:
         raise HTTPException(status_code=401, detail="Falta token de autenticacion")
 
-    token = authorization.split(" ", 1)[1]
     user = get_current_user(token)
     if user is None:
         raise HTTPException(status_code=401, detail="Token invalido o expirado")
@@ -318,9 +380,11 @@ async def health():
 
 
 @app.post("/login", response_model=LoginResponse)
-async def login(req: LoginRequest, request: Request):
+async def login(req: LoginRequest, request: Request, response: Response):
     """Autentica un usuario y devuelve un JWT token.
 
+    El token se establece tambien en una cookie HttpOnly `access_token` para
+    que el frontend Next.js no necesite guardarlo en localStorage.
     Aplica rate limiting por IP para prevenir fuerza bruta.
     No revela si el usuario existe.
     """
@@ -338,11 +402,28 @@ async def login(req: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
 
     token = create_access_token(user)
+    secure_cookie = settings.environment == "production"
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        max_age=3600,
+        path="/",
+    )
     return LoginResponse(
         access_token=token,
         role=user["role"],
         display_name=user["display_name"],
     )
+
+
+@app.post("/logout")
+async def logout(response: Response):
+    """Cierra la sesion eliminando la cookie access_token."""
+    response.delete_cookie(key="access_token", path="/")
+    return {"ok": True}
 
 
 @app.get("/me")
@@ -394,7 +475,13 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user)):
 
     if is_interrupted:
         # Persistir la solicitud en la cola HITL
-        _enqueue_hitl(thread_id, result.get("action_plan"), user)
+        _enqueue_hitl(
+            thread_id,
+            query=req.query,
+            intencion=result.get("intencion", ""),
+            action_plan=result.get("action_plan"),
+            user=user,
+        )
         return ChatResponse(
             thread_id=thread_id,
             intencion=result.get("intencion", ""),
