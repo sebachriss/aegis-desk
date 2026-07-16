@@ -8,6 +8,7 @@ se marcan como rechazadas y no se ejecutan.
 """
 
 from datetime import datetime
+from typing import Any
 
 from langgraph.types import interrupt
 
