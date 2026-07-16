@@ -14,11 +14,12 @@ from langgraph.types import interrupt
 from src.agents.state import AgentState
 
 
-def _redact_sensitive_args(tool_name: str, arguments: dict) -> dict:
+def _redact_sensitive_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Limita los argumentos mostrados al revisor para no exponer datos sensibles."""
     if tool_name == "enviar_email":
-        return {k: v for k, v in arguments.items() if k not in ("cuerpo", "asunto") or k == "para"}
-    return {k: v for k, v in arguments.items() if k not in ("password", "token", "api_key")}
+        # Mostrar solo destinatario; ocultar cuerpo y asunto del resumen HITL
+        return {k: v for k, v in arguments.items() if k == "para"}
+    return {k: v for k, v in arguments.items() if k not in {"password", "token", "api_key", "secret"}}
 
 
 def hitl_node(state: AgentState) -> dict:
@@ -35,18 +36,18 @@ def hitl_node(state: AgentState) -> dict:
             "requires_human_review": False,
         }
 
-    # Si ya fue aprobada o rechazada, no volver a pausar
-    current_status = action_plan.get("approval_status")
-    if current_status in ("approved", "rejected"):
-        return {
-            "requires_human_review": False,
-        }
-
-    # Si ya fue ejecutada, no aprobar de nuevo
+    # Si ya fue ejecutada, no permitir cambios posteriores (replay protection)
     if action_plan.get("execution_status") == "succeeded" or action_plan.get("executed_at"):
         return {
             "respuesta": "⚠️ Esta acción ya fue ejecutada. No se puede aprobar de nuevo.",
             "action_plan": {**action_plan, "approval_status": "rejected"},
+            "requires_human_review": False,
+        }
+
+    # Si ya fue aprobada/rechazada previamente, mantener su estado
+    current_status = action_plan.get("approval_status")
+    if current_status in ("approved", "rejected"):
+        return {
             "requires_human_review": False,
         }
 
@@ -71,16 +72,24 @@ Responde 'approve' para ejecutar o 'reject' para denegar.
     # Pausar ejecucion hasta que un humano responda
     decision = interrupt(resumen)
 
-    # Validar decision estrictamente
-    if decision not in ("approve", "reject"):
-        return {
-            "respuesta": "⛔ Decisión inválida. Debe ser 'approve' o 'reject'. Acción rechazada por seguridad.",
-            "action_plan": {**action_plan, "approval_status": "rejected"},
-            "requires_human_review": False,
-        }
-
     approved_by = state.get("user_id", "unknown")
     approved_at = datetime.now().isoformat()
+
+    # Decision invalida: bloquear por seguridad y registrar quien intento
+    if decision not in ("approve", "reject"):
+        updated_plan = {
+            **action_plan,
+            "approval_status": "rejected",
+            "approved_by": f"{approved_by}:invalid_decision",
+            "approved_at": approved_at,
+        }
+        return {
+            "respuesta": "⛔ Decisión inválida. Debe ser 'approve' o 'reject'. Acción rechazada por seguridad.",
+            "action_plan": updated_plan,
+            "approved_by": f"{approved_by}:invalid_decision",
+            "approved_at": approved_at,
+            "requires_human_review": False,
+        }
 
     if decision == "approve":
         updated_plan = {

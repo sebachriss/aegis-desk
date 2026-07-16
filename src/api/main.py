@@ -49,8 +49,10 @@ app = FastAPI(
 
 # CORS restringido a los origenes configurados
 cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if settings.environment == "production" and not cors_origins:
+    raise RuntimeError("CORS_ORIGINS es obligatorio en produccion")
 if not cors_origins:
-    cors_origins = ["*"]
+    cors_origins = []
 
 app.add_middleware(
     CORSMiddleware,
@@ -171,7 +173,11 @@ async def login(req: LoginRequest, request: Request):
     client_ip = request.client.host if request.client else "unknown"
     rate = check_login_rate_limit(client_ip)
     if not rate["allowed"]:
-        raise HTTPException(status_code=429, detail=rate["reason"])
+        raise HTTPException(
+            status_code=429,
+            detail=rate["reason"],
+            headers={"Retry-After": str(rate["retry_after"])},
+        )
 
     user = authenticate(req.username, req.password)
     if user is None:

@@ -8,6 +8,8 @@ requieren aprobacion HITL antes de ejecutarse.
 
 from datetime import datetime
 from typing import Any
+import hashlib
+import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -67,16 +69,22 @@ def _new_action_id() -> str:
     return f"act_{datetime.now().isoformat()}"
 
 
+def _idempotency_key(tool_name: str, arguments: dict) -> str:
+    """Genera una clave determinista para evitar ejecuciones duplicadas."""
+    canonical = json.dumps({"tool_name": tool_name, "arguments": arguments}, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
 def action_planner_node(state: AgentState) -> dict:
     """Nodo del grafo: planifica una accion sin ejecutarla.
 
     Valida RBAC, obtiene tools permitidas, y usa structured output
     para generar un action_plan estructurado.
     """
-    role = state.get("role", "empleado")
+    role = state.get("role")
     query = state["query"]
 
-    # Fail closed: roles desconocidos no acceden a tools
+    # Fail closed: sin rol explicito, no hay acceso a tools
     if not validate_role(role):
         return {
             "respuesta": "⛔ Rol inválido o no especificado. Contacta al administrador.",
@@ -155,7 +163,7 @@ def action_planner_node(state: AgentState) -> dict:
         "risk_level": risk_level,
         "approval_status": approval_status,
         "execution_status": "not_started",
-        "idempotency_key": _new_action_id(),
+        "idempotency_key": _idempotency_key(tool_name, plan.arguments),
         "executed_at": None,
         "reasoning": plan.reasoning,
     }
@@ -193,6 +201,7 @@ def action_executor_node(state: AgentState) -> dict:
         return {
             "respuesta": action_plan.get("result", "Esta acción ya fue ejecutada."),
             "fuentes": [],
+            "action_plan": action_plan,
         }
 
     tool_name = action_plan.get("tool_name")
@@ -235,5 +244,4 @@ def action_executor_node(state: AgentState) -> dict:
         }
 
 
-# Nodo legacy: mantiene compatibilidad mientras se migra el grafo
-action_node = action_planner_node
+# Nota: el grafo debe usar action_planner_node/action_executor_node, no action_node.
