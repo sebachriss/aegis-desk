@@ -1,23 +1,27 @@
-"""Herramientas de tickets de soporte usando SQLite como fuente unica.
+"""Herramientas de tickets de soporte.
 
 Fase 7 (REL-04): las operaciones de tickets se mueven a la base de datos SQLite
 compartida con data_agent, eliminando la lista global en memoria.
+
+Fase 12: soporte opcional de Supabase para persistencia en producción.
 """
 
-import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from langchain_core.tools import tool
 
+from src.db.supabase_client import get_supabase_client, is_supabase_configured
 from src.tools.sql import _init_db
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "aegis.db"
 
 
-def _get_connection() -> sqlite3.Connection:
-    """Abre una conexion a la base de datos de tickets."""
+def _get_connection():
+    """Abre una conexion SQLite local (legacy)."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     _init_db()
+    import sqlite3
     return sqlite3.connect(str(DB_PATH))
 
 
@@ -40,13 +44,27 @@ def crear_ticket(titulo: str, descripcion: str, prioridad: str, created_by: str 
     if len(titulo) > 100:
         titulo = titulo[:100]
 
-    from datetime import datetime
+    created_at = datetime.now().isoformat()
+
+    if is_supabase_configured():
+        client = get_supabase_client()
+        data = {
+            "titulo": titulo,
+            "descripcion": descripcion,
+            "prioridad": prioridad,
+            "estado": "abierto",
+            "created_by": created_by,
+            "created_at": created_at,
+        }
+        response = client.table("tickets").insert(data).execute()
+        ticket_id = response.data[0]["id"]
+        return f"Ticket #{ticket_id} creado con prioridad '{prioridad}'. Titulo: {titulo}. Estado: abierto. Creado por: {created_by or 'sistema'}."
 
     conn = _get_connection()
     try:
         cursor = conn.execute(
             "INSERT INTO tickets (titulo, descripcion, prioridad, estado, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (titulo, descripcion, prioridad, "abierto", created_by, datetime.now().isoformat()),
+            (titulo, descripcion, prioridad, "abierto", created_by, created_at),
         )
         conn.commit()
         ticket_id = cursor.lastrowid
@@ -67,6 +85,25 @@ def listar_tickets(estado: str = "todos", created_by: str = "") -> str:
     Returns:
         Lista de tickets formateada, o mensaje si no hay resultados.
     """
+    if is_supabase_configured():
+        client = get_supabase_client()
+        query = client.table("tickets").select("id, titulo, prioridad, estado")
+        if created_by and estado != "todos":
+            response = query.eq("estado", estado).eq("created_by", created_by).order("id", desc=True).execute()
+        elif created_by:
+            response = query.eq("created_by", created_by).order("id", desc=True).execute()
+        elif estado == "todos":
+            response = query.order("id", desc=True).execute()
+        else:
+            if estado not in ("abierto", "cerrado"):
+                return f"Error: estado '{estado}' no valido. Usa: abierto, cerrado, o todos."
+            response = query.eq("estado", estado).order("id", desc=True).execute()
+        tickets = response.data
+        if not tickets:
+            return f"No hay tickets con estado '{estado}'."
+        lineas = [f"#{t['id']} [{t['prioridad']}] {t['titulo']} - {t['estado']}" for t in tickets]
+        return f"Tickets ({len(tickets)}):\n" + "\n".join(lineas)
+
     conn = _get_connection()
     try:
         if created_by and estado != "todos":
@@ -109,6 +146,20 @@ def buscar_ticket(ticket_id: int) -> str:
     Returns:
         Detalles completos del ticket, o mensaje si no existe.
     """
+    if is_supabase_configured():
+        client = get_supabase_client()
+        response = client.table("tickets").select("*").eq("id", ticket_id).execute()
+        t = response.data[0] if response.data else None
+        if not t:
+            return f"No se encontro el ticket #{ticket_id}."
+        return (
+            f"Ticket #{t['id']}\n"
+            f"  Titulo: {t['titulo']}\n"
+            f"  Descripcion: {t.get('descripcion', '')}\n"
+            f"  Prioridad: {t['prioridad']}\n"
+            f"  Estado: {t['estado']}"
+        )
+
     conn = _get_connection()
     try:
         cursor = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))

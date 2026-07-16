@@ -26,3 +26,8 @@ httpx>=0.27.0
 
 # QA tests
 pytest>=8.0.0
+
+# Fase 12 — Backends cloud opcionales (Pinecone + Supabase)
+pinecone>=5.0.0
+supabase>=2.0.0
+psycopg2-binary>=2.9.0
