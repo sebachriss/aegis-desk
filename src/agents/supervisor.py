@@ -184,10 +184,18 @@ def supervisor_node(state: AgentState) -> dict:
     llm = get_fast_llm()
     llm_estructurado = llm.with_structured_output(ClasificacionSupervisor, method="function_calling")
 
-    result = llm_estructurado.invoke([
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=query),
-    ])
+    try:
+        result = llm_estructurado.invoke([
+            SystemMessage(content=SYSTEM_PROMPT),
+            HumanMessage(content=query),
+        ])
+    except Exception:
+        # Fallback seguro: si el LLM no logra llamar a la función (ej. prompt injection
+        # o formato inválido), dejar que el chat_agent maneje la consulta con sus reglas de seguridad.
+        return {
+            "intencion": "chat",
+            "confidence": 1.0,
+        }
 
     return {
         "intencion": result.intencion,

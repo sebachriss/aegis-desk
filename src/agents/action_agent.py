@@ -121,8 +121,9 @@ def action_planner_node(state: AgentState) -> dict:
     # Normalizar: validar que la tool exista y este permitida
     tool_name = plan.tool_name.strip().lower() if plan.tool_name else "none"
     if tool_name == "none":
+        reasoning = plan.reasoning or "No se encontró una herramienta adecuada para tu solicitud."
         return {
-            "respuesta": plan.reasoning or "No se encontró una herramienta adecuada para tu solicitud.",
+            "respuesta": f"No puedo realizar esta acción: {reasoning}",
             "fuentes": [],
             "tool_name": None,
             "authorization_decision": "denied",
@@ -143,7 +144,7 @@ def action_planner_node(state: AgentState) -> dict:
     allowed_names = {getattr(t, "name", None) for t in allowed_tools if getattr(t, "name", None)}
     if tool_name not in allowed_names:
         return {
-            "respuesta": f"⛔ No tienes permiso para usar la herramienta '{tool_name}'.",
+            "respuesta": f"No puedo: no tienes permiso para usar la herramienta '{tool_name}'.",
             "fuentes": [],
             "tool_name": tool_name,
             "authorization_decision": "denied",
