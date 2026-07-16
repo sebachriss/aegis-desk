@@ -156,6 +156,13 @@ def run_evals(category: str | None = None, save: bool = False) -> dict:
     print(f"\n  Total casos: {total_cases}")
     print(f"  Categorías: {', '.join(cases_by_category.keys())}")
 
+    # Resetear base de datos para resultados deterministas
+    from src.tools.sql import DB_PATH, _init_db
+    if DB_PATH.exists():
+        DB_PATH.unlink()
+    _init_db()
+    print("\n  Base de datos reiniciada para evals.")
+
     # Construir grafo con checkpointer (para HITL auto-aprobar)
     print("\n  Construyendo grafo...")
     checkpointer = MemorySaver()
