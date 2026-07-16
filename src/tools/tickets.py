@@ -11,7 +11,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from src.db.supabase_client import get_supabase_client, is_supabase_configured
+from src.db.supabase_client import get_supabase_service_client, is_supabase_configured
 from src.tools.sql import _init_db
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "aegis.db"
@@ -47,7 +47,7 @@ def crear_ticket(titulo: str, descripcion: str, prioridad: str, created_by: str 
     created_at = datetime.now().isoformat()
 
     if is_supabase_configured():
-        client = get_supabase_client()
+        client = get_supabase_service_client()
         data = {
             "titulo": titulo,
             "descripcion": descripcion,
@@ -86,7 +86,7 @@ def listar_tickets(estado: str = "todos", created_by: str = "") -> str:
         Lista de tickets formateada, o mensaje si no hay resultados.
     """
     if is_supabase_configured():
-        client = get_supabase_client()
+        client = get_supabase_service_client()
         query = client.table("tickets").select("id, titulo, prioridad, estado")
         if created_by and estado != "todos":
             response = query.eq("estado", estado).eq("created_by", created_by).order("id", desc=True).execute()
@@ -147,7 +147,7 @@ def buscar_ticket(ticket_id: int) -> str:
         Detalles completos del ticket, o mensaje si no existe.
     """
     if is_supabase_configured():
-        client = get_supabase_client()
+        client = get_supabase_service_client()
         response = client.table("tickets").select("*").eq("id", ticket_id).execute()
         t = response.data[0] if response.data else None
         if not t:

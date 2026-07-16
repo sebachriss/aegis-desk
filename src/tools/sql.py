@@ -252,17 +252,13 @@ def _format_rows(rows: list, columns: list[str], mask_sensitive: bool = True) ->
 
 def _execute_postgres(query: str) -> str:
     """Ejecuta un SELECT validado contra Postgres/Supabase en modo solo lectura."""
-    try:
-        import psycopg2
-    except ImportError as exc:
-        return "Error: paquete psycopg2 no instalado. Ejecuta: pip install psycopg2-binary"
+    from src.db.postgres_utils import get_postgres_connection
 
-    settings = get_settings()
-    conn = psycopg2.connect(
-        settings.database_url,
-        options="-c default_transaction_read_only=on",
-        connect_timeout=QUERY_TIMEOUT,
-    )
+    try:
+        conn = get_postgres_connection(read_only=True, connect_timeout=QUERY_TIMEOUT)
+    except Exception as e:
+        return f"Error de conexion: {e}"
+
     try:
         with conn.cursor() as cursor:
             # Validación textual idéntica a SQLite
@@ -287,7 +283,7 @@ def _execute_postgres(query: str) -> str:
             if truncated:
                 result += f"\n... (limite de {MAX_ROWS} filas alcanzado)"
             return result
-    except psycopg2.Error as e:
+    except Exception as e:
         return f"Error de SQL: {e}"
     finally:
         conn.close()
