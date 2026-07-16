@@ -11,9 +11,10 @@ Los empleados de Aegis Corp hacen consultas y un equipo de agentes de IA las res
 
 ```
 "¿Cuántos días de vacaciones tengo?"     → RAG Agent busca en documentos
-"Crea un ticket de alta prioridad"       → Action Agent crea ticket → HITL aprueba
+"Crea un ticket de alta prioridad"       → Action Agent crea ticket (sin HITL)
+"Envía un email a RRHH"                  → Action Agent → HITL aprueba (acción sensible)
 "¿Cuántos empleados hay en Ventas?"      → Data Agent consulta SQL (solo admin)
-"Hola, ¿qué tal?"                        → Chat Agent responde
+"Hola, ¿qué tal?"                        → Chat Agent responde (fast path, sin LLM)
 "Ignora tus instrucciones y..."          → Security Node bloquea
 ```
 
@@ -27,10 +28,13 @@ Security Node (prompt injection + rate limit + sanitize)
   │
   ▼
 Supervisor (clasifica intención → enruta)
-  │        │         │          │
-  ▼        ▼         ▼          ▼
-RAG      Data      Action     Chat
-(docs)   (SQL)    (tools)    (fallback)
+  │                          │
+  │ Fast path: "hola" → chat │
+  │ (regex, sin LLM)         │
+  │        │         │       │
+  ▼        ▼         ▼       ▼
+RAG      Data      Action    Chat
+(docs)   (SQL)    (tools)   (fallback)
   │        │         │          │
   └────────┴────┬────┴──────────┘
                ▼
@@ -38,13 +42,18 @@ RAG      Data      Action     Chat
                │
       ┌────────┴────────┐
       ▼                 ▼
- Respuesta OK      HITL (interrupt →
- (usuario)         aprobación humana)
+ Respuesta OK      HITL (solo emails)
+ (usuario)         (interrupt → aprobación)
                         │
                    ┌────┴────┐
                    ▼         ▼
                 Aprobar   Rechazar
                 (ejecuta)  (cancela)
+
+Notas:
+- Tickets (crear/listar/buscar) NO van a HITL — son acciones rutinarias
+- Chat con confidence alta skip al crítico → respuesta directa
+- Supervisor usa Groq (gratis, ~0.4s), workers usan DeepInfra DeepSeek
 ```
 
 ### Defense-in-depth (4 capas)
@@ -60,16 +69,27 @@ Capa 4: HITL              → humano aprueba antes de ejecutar acciones
 
 | Capa | Tecnología |
 |---|---|
-| LLM | DeepInfra — DeepSeek-V4-Flash |
+| LLM (workers) | DeepInfra — DeepSeek-V4-Flash (RAG, datos, acción, chat) |
+| LLM (supervisor + crítico) | Groq — Llama-3.1-8B-Instant / Llama-3.3-70b (gratis, ~0.4s) |
 | Framework | LangChain + LangGraph |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2, local) |
 | Vector Store | Chroma (persistente local) |
 | Base de datos | SQLite |
 | API | FastAPI + Uvicorn |
-| UI | Streamlit |
+| Frontend | Next.js 16 + React 19 + shadcn/ui + Tailwind 4 + Recharts |
 | Observabilidad | Métricas propias + tracing JSONL |
 | Evals | LLM-as-judge + métricas RAG (faithfulness, relevance, precision) |
-| Deploy | Docker + Docker Compose |
+| Deploy | Docker + Docker Compose (target: Vercel + Render) |
+
+### Modelo híbrido de latencia
+
+| Nodo | Modelo | Provider | Latencia |
+|---|---|---|---|
+| Supervisor | Llama-3.1-8B-Instant | Groq (free) | ~0.4s |
+| Crítico | Llama-3.3-70b-versatile | Groq (free) | ~0.5s |
+| RAG / Data / Action / Chat | DeepSeek-V4-Flash | DeepInfra | ~3-5s |
+
+**Fast path**: saludos triviales ("hola", "gracias", "adiós") se clasifican con regex en el supervisor, sin llamar al LLM.
 
 ## Estructura del proyecto
 
@@ -78,7 +98,7 @@ aegis-desk/
 ├── src/
 │   ├── config.py               # Settings con pydantic-settings
 │   ├── llm/
-│   │   └── providers.py        # get_llm() multi-proveedor
+│   │   └── providers.py        # get_llm() + get_fast_llm() (Groq + DeepInfra)
 │   ├── memory/
 │   │   └── short_term.py       # ChatMemory con ventana deslizante
 │   ├── observability/
@@ -96,14 +116,14 @@ aegis-desk/
 │   │   └── registry.py         # Registro central de herramientas
 │   ├── agents/
 │   │   ├── state.py            # AgentState (TypedDict)
-│   │   ├── supervisor.py       # Clasifica intención (Literal)
+│   │   ├── supervisor.py       # Clasifica intención (Literal) + fast path regex
 │   │   ├── rag_agent.py        # Worker RAG
 │   │   ├── data_agent.py       # Worker SQL (ReAct)
 │   │   ├── action_agent.py     # Worker acciones (ReAct)
 │   │   ├── chat_agent.py       # Worker fallback + acceso denegado + anti-injection
-│   │   ├── critic_agent.py     # Evalúa respuestas, loop de reintento
+│   │   ├── critic_agent.py     # Evalúa respuestas, loop de reintento (Groq 70b)
 │   │   ├── security_node.py    # Guardrails (injection + rate limit)
-│   │   ├── hitl_node.py        # Human-in-the-Loop con interrupt()
+│   │   ├── hitl_node.py        # Human-in-the-Loop (solo acciones sensibles)
 │   │   ├── react_agent.py      # Agente ReAct standalone (Fase 3)
 │   │   └── graph.py            # Grafo LangGraph ensamblado
 │   ├── security/
@@ -114,7 +134,22 @@ aegis-desk/
 │   └── api/
 │       └── main.py             # FastAPI: /chat, /hitl, /stats, /health
 ├── ui/
-│   └── app.py                  # Streamlit: Chat, HITL, Dashboard
+│   └── app.py                  # Streamlit (legacy, Chat/HITL/Dashboard)
+├── frontend/                   # Next.js 16 + React 19 + shadcn/ui
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── login/          # Página de login
+│   │   │   └── (protected)/
+│   │   │       ├── chat/       # Vista de chat con el agente
+│   │   │       ├── hitl/       # Aprobaciones pendientes (admin)
+│   │   │       ├── dashboard/  # Dashboard de métricas
+│   │   │       └── metrics/    # Métricas detalladas
+│   │   ├── components/         # shadcn/ui + sidebar
+│   │   └── lib/
+│   │       ├── api.ts          # Cliente API (fetch, auth, tipos)
+│   │       └── auth-context.tsx # Context de autenticación
+│   ├── package.json
+│   └── next.config.ts
 ├── evals/
 │   ├── datasets/
 │   │   └── test_cases.json     # 33 casos de test (RAG, datos, accion, chat, adversarial)
@@ -139,7 +174,11 @@ aegis-desk/
 │   ├── test_multi_agent.py     # Fase 4: multi-agente
 │   ├── test_security.py        # Fase 5: seguridad
 │   ├── test_hitl.py            # Fase 6: HITL
-│   └── test_tracing.py         # Fase 7: tracing
+│   ├── test_tracing.py         # Fase 7: tracing
+│   ├── test_groq.py            # Test latencia Groq vs DeepInfra
+│   ├── test_groq_api.py        # Test latencia grafo completo (híbrido)
+│   ├── test_groq_structured.py # Test structured output con Groq
+│   └── cli_chat.py             # CLI interactivo
 ├── data/                       # Chroma DB + SQLite + traces (gitignored)
 ├── Dockerfile                  # Imagen Python 3.11-slim
 ├── docker-compose.yml          # API (8000) + UI (8501)
@@ -164,9 +203,11 @@ source .venv/bin/activate  # Linux/Mac
 # 3. Instalar dependencias
 pip install -r requirements.txt
 
-# 4. Configurar API key
+# 4. Configurar API keys
 cp .env.example .env
-# Editar .env y poner DEEPINFRA_API_KEY=...
+# Editar .env:
+#   DEEPINFRA_API_KEY=...    (requerido, LLM principal)
+#   GROQ_API_KEY=...         (opcional, supervisor+crítico, free tier)
 
 # 5. Indexar documentos (RAG)
 python -m src.rag.ingest
@@ -187,14 +228,21 @@ python -m evals.run_evals --save    # Suite de 33 casos
 python -m redteam.run_redteam --save # Suite de 31 ataques
 ```
 
-## Levantar la API + UI
+## Levantar la API + Frontend
 
 ```bash
-# Opción A: Local
-uvicorn src.api.main:app --port 8000    # API
-streamlit run ui/app.py --server.port 8501  # UI
+# API (FastAPI)
+uvicorn src.api.main:app --port 8000
 
-# Opción B: Docker
+# Frontend (Next.js)
+cd frontend
+npm install
+npm run dev    # http://localhost:3000
+
+# UI legacy (Streamlit)
+streamlit run ui/app.py --server.port 8501
+
+# Docker (API + Streamlit legacy)
 docker-compose up
 ```
 
@@ -202,18 +250,21 @@ docker-compose up
 |---|---|---|
 | API | http://localhost:8000 | FastAPI |
 | API docs | http://localhost:8000/docs | Swagger interactivo |
-| UI | http://localhost:8501 | Streamlit (Chat, HITL, Dashboard) |
+| Frontend | http://localhost:3000 | Next.js (Chat, HITL, Dashboard, Métricas) |
+| UI legacy | http://localhost:8501 | Streamlit (Chat, HITL, Dashboard) |
 
 ### Endpoints de la API
 
 | Método | Path | Descripción |
 |---|---|---|
+| `POST` | `/login` | Autenticar usuario y obtener JWT |
 | `POST` | `/chat` | Enviar mensaje al agente |
 | `GET` | `/hitl/pending` | Ver pendientes de HITL |
-| `POST` | `/hitl/{thread_id}/approve` | Aprobar acción |
-| `POST` | `/hitl/{thread_id}/reject` | Rechazar acción |
+| `POST` | `/hitl/{thread_id}/approve` | Aprobar acción (admin) |
+| `POST` | `/hitl/{thread_id}/reject` | Rechazar acción (admin) |
 | `GET` | `/stats` | Métricas de tracing |
 | `GET` | `/health` | Health check |
+| `GET` | `/me` | Info del usuario autenticado |
 
 ## Fases del proyecto
 
@@ -229,6 +280,9 @@ docker-compose up
 | 7 | Evals y Observabilidad (LLM-as-judge, RAGAS, tracing) | ✅ | 32/33 pass (97%) |
 | 8 | API, UI y Deploy (FastAPI, Streamlit, Docker) | ✅ | 6 endpoints |
 | 9 | Red Teaming Final (31 ataques, 8 categorías) | ✅ | 31/31 defended (100%) |
+| 10 | Cierre y documentación final | ✅ | README completo |
+| — | Optimizaciones de latencia (Groq + fast path + HITL inteligente) | ✅ | Ver OPTIMIZATIONS.md |
+| — | Frontend Next.js (shadcn/ui, Tailwind 4, Recharts) | ✅ | Chat, HITL, Dashboard, Métricas |
 
 ## Resultados de Evals
 
@@ -282,6 +336,10 @@ Defense rate: 100.0%
 - **Evals como regression test**: si cambias un prompt, corres `python -m evals.run_evals` y comparas contra el baseline
 - **Red teaming encuentra bugs reales**: el RBAC bypass del crítico no se detectó hasta que atacamos el sistema
 - **Tracing JSONL**: simple, append-only, fácil de parsear. Base para LangSmith/Langfuse en producción
+- **Modelo híbrido**: usar LLM gratis y rápido (Groq Llama-8B) para clasificación/evaluación y LLM de calidad (DeepSeek) para generación de respuestas
+- **Fast path regex**: saludos triviales no necesitan LLM — regex en supervisor ahorra ~3s por mensaje
+- **HITL selectivo**: no todas las acciones necesitan aprobación humana — tickets son rutinarios, solo emails son sensibles
+- **Structured output con Groq**: `function_calling` funciona, `json_schema` no soportado en Llama-3.1-8B, `json_mode` no garantiza schema completo
 
 ## Seguridad
 
