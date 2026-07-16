@@ -1,0 +1,65 @@
+# Secrets y entorno
+.env
+.env.example
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Datos de desarrollo (se montan como volúmenes en runtime)
+data/
+!data/.gitkeep
+
+# Traces y resultados generados
+data/traces.jsonl
+evals/results/
+redteam/results/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*
+frontend/.eslint*
+frontend/.gitignore
+
+# IDEs y OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Docs no necesarias en runtime
+*.md
+!README.md

@@ -13,11 +13,12 @@ Requiere que la API esté corriendo:
   uvicorn src.api.main:app --reload --port 8000
 """
 
+import os
 import requests
 
 import streamlit as st
 
-API_URL = "http://localhost:8000"
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 st.set_page_config(
     page_title="Aegis Desk",
