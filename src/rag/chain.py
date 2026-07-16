@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.llm.providers import get_llm
 from src.rag.retriever import search
+from src.security.pii_filter import filter_pii
 
 # Prompt de sistema: le dice al LLM como comportarse
 SYSTEM_PROMPT = """Eres un asistente de soporte interno de Aegis Corp.
@@ -69,8 +70,11 @@ def rag_query(question: str, k: int = 3) -> dict:
     llm = get_llm(temperature=0)  # temperature=0 para respuestas mas factuales
     response = llm.invoke([system_msg, user_msg])
 
+    # 5. Redactar PII en la respuesta final
+    answer_filtrada, _ = filter_pii(response.content)
+
     return {
-        "answer": response.content,
+        "answer": answer_filtrada,
         "sources": chunks,
         "usage": response.usage_metadata,
     }

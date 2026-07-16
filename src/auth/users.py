@@ -1,15 +1,23 @@
 """Usuarios de prueba para Aegis Desk.
 
-En producción, esto vendría de una DB real.
-Por ahora, usuarios hardcodeados con passwords hasheadas.
+En produccion, esto vendria de una DB real.
+Por ahora, usuarios hardcodeados con passwords hasheadas con bcrypt.
 """
 
-import hashlib
+import bcrypt
 
 
 def _hash(password: str) -> str:
-    """Hash simple con SHA-256 (suficiente para demo educativo)."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash seguro con bcrypt y salt automatico."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify(password: str, password_hash: str) -> bool:
+    """Verifica un password contra un hash bcrypt."""
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 # Usuarios: username -> {password_hash, role, display_name}
@@ -35,13 +43,15 @@ USERS = {
 def authenticate(username: str, password: str) -> dict | None:
     """Verifica credenciales y devuelve el usuario si son correctas.
 
+    No revela si el usuario existe o la contraseña es incorrecta.
+
     Returns:
         Dict con username, role, display_name si autentica, None si no.
     """
     user = USERS.get(username)
     if user is None:
         return None
-    if user["password_hash"] != _hash(password):
+    if not _verify(password, user["password_hash"]):
         return None
     return {
         "username": username,

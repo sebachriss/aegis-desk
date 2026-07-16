@@ -1,21 +1,24 @@
-"""Herramienta simulada de tickets de soporte.
+"""Herramientas de tickets de soporte usando SQLite como fuente unica.
 
-Las funciones usan el decorador @tool de LangChain para convertirse
-en herramientas que el LLM puede invocar via function calling.
-
-Los tickets se guardan en una lista en memoria (simulado, sin DB real).
+Fase 7 (REL-04): las operaciones de tickets se mueven a la base de datos SQLite
+compartida con data_agent, eliminando la lista global en memoria.
 """
+
+import sqlite3
+from pathlib import Path
 
 from langchain_core.tools import tool
 
-# "Base de datos" simulada — lista en memoria
-# En produccion seria una DB real (SQLite, PostgreSQL, etc.)
-_tickets_db: list[dict] = [
-    {"id": 1, "titulo": "VPN no conecta", "descripcion": "Cliente VPN falla al autenticar", "prioridad": "media", "estado": "abierto"},
-    {"id": 2, "titulo": "Laptop lenta", "descripcion": "Laptop tarda 5 min en iniciar", "prioridad": "baja", "estado": "abierto"},
-    {"id": 3, "titulo": "Email no llega", "descripcion": "No recibo emails de dominios externos", "prioridad": "alta", "estado": "cerrado"},
-]
-_next_id = 4
+from src.tools.sql import _init_db
+
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "aegis.db"
+
+
+def _get_connection() -> sqlite3.Connection:
+    """Abre una conexion a la base de datos de tickets."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _init_db()
+    return sqlite3.connect(str(DB_PATH))
 
 
 @tool
@@ -30,22 +33,24 @@ def crear_ticket(titulo: str, descripcion: str, prioridad: str) -> str:
     Returns:
         Confirmacion con el ID del ticket creado.
     """
-    global _next_id
-
     if prioridad not in ("baja", "media", "alta"):
         return f"Error: prioridad '{prioridad}' no valida. Usa: baja, media, o alta."
 
-    ticket = {
-        "id": _next_id,
-        "titulo": titulo,
-        "descripcion": descripcion,
-        "prioridad": prioridad,
-        "estado": "abierto",
-    }
-    _tickets_db.append(ticket)
-    _next_id += 1
+    if len(titulo) > 100:
+        titulo = titulo[:100]
 
-    return f"Ticket #{ticket['id']} creado con prioridad '{prioridad}'. Titulo: {titulo}. Estado: abierto."
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO tickets (titulo, descripcion, prioridad, estado) VALUES (?, ?, ?, ?)",
+            (titulo, descripcion, prioridad, "abierto"),
+        )
+        conn.commit()
+        ticket_id = cursor.lastrowid
+    finally:
+        conn.close()
+
+    return f"Ticket #{ticket_id} creado con prioridad '{prioridad}'. Titulo: {titulo}. Estado: abierto."
 
 
 @tool
@@ -58,18 +63,25 @@ def listar_tickets(estado: str = "todos") -> str:
     Returns:
         Lista de tickets formateada, o mensaje si no hay resultados.
     """
-    if estado == "todos":
-        tickets = _tickets_db
-    else:
-        tickets = [t for t in _tickets_db if t["estado"] == estado]
+    conn = _get_connection()
+    try:
+        if estado == "todos":
+            cursor = conn.execute("SELECT id, titulo, prioridad, estado FROM tickets ORDER BY id DESC")
+        else:
+            if estado not in ("abierto", "cerrado"):
+                return f"Error: estado '{estado}' no valido. Usa: abierto, cerrado, o todos."
+            cursor = conn.execute(
+                "SELECT id, titulo, prioridad, estado FROM tickets WHERE estado = ? ORDER BY id DESC",
+                (estado,),
+            )
+        tickets = cursor.fetchall()
+    finally:
+        conn.close()
 
     if not tickets:
         return f"No hay tickets con estado '{estado}'."
 
-    lineas = []
-    for t in tickets:
-        lineas.append(f"#{t['id']} [{t['prioridad']}] {t['titulo']} - {t['estado']}")
-
+    lineas = [f"#{t[0]} [{t[2]}] {t[1]} - {t[3]}" for t in tickets]
     return f"Tickets ({len(tickets)}):\n" + "\n".join(lineas)
 
 
@@ -83,14 +95,20 @@ def buscar_ticket(ticket_id: int) -> str:
     Returns:
         Detalles completos del ticket, o mensaje si no existe.
     """
-    for t in _tickets_db:
-        if t["id"] == ticket_id:
-            return (
-                f"Ticket #{t['id']}\n"
-                f"  Titulo: {t['titulo']}\n"
-                f"  Descripcion: {t['descripcion']}\n"
-                f"  Prioridad: {t['prioridad']}\n"
-                f"  Estado: {t['estado']}"
-            )
+    conn = _get_connection()
+    try:
+        cursor = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
+        t = cursor.fetchone()
+    finally:
+        conn.close()
 
-    return f"No se encontro el ticket #{ticket_id}."
+    if not t:
+        return f"No se encontro el ticket #{ticket_id}."
+
+    return (
+        f"Ticket #{t[0]}\n"
+        f"  Titulo: {t[1]}\n"
+        f"  Descripcion: {t[2]}\n"
+        f"  Prioridad: {t[3]}\n"
+        f"  Estado: {t[4]}"
+    )

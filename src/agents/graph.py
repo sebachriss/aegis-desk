@@ -1,24 +1,21 @@
-"""Grafo multi-agente: ensambla seguridad + supervisor + workers + crítico + HITL en LangGraph.
+"""Grafo multi-agente: ensambla seguridad + supervisor + workers + critico + HITL en LangGraph.
 
 Estructura:
-  START → security → supervisor → (rag | datos | accion | chat) → crítico → (END | reintento | hitl)
-              ↓                                                                        ↓
-         bloqueado → END                                                              ↓
-                                                                              hitl_review → END
+  START -> security -> supervisor -> (rag | datos | accion | chat) -> critico -> (END | reintento | hitl)
+              |                                                                          |
+         bloqueado -> END                                                           hitl_review
+                                                                                        |
+                                                                                action_executor -> END
 
-El nodo de seguridad verifica prompt injection y rate limit antes de procesar.
-El supervisor clasifica la intención y enruta a un worker (verificando RBAC).
-El worker genera la respuesta.
-El crítico evalúa la respuesta:
-  - Buena → END
-  - Mala con retries disponibles → vuelve al worker
-  - Mala sin retries → hitl_review (revisión humana) → END
-  - Acciones sensibles (intencion=accion) → hitl_review → END
+Fase 1 (SEC-01): RBAC real de tools. Los workers reciben solo las tools permitidas por rol.
+Fase 2 (SEC-02): separa action_planner de action_executor. Acciones de alto riesgo pasan
+por HITL antes de ejecutarse. La deteccion de HITL ya no depende de frases del LLM.
 """
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from src.agents.action_agent import action_node
+from src.agents.action_agent import action_executor_node, action_planner_node
 from src.agents.chat_agent import chat_node
 from src.agents.critic_agent import critic_node
 from src.agents.data_agent import data_node
@@ -33,7 +30,7 @@ from src.security.rbac import can_access
 def route_from_security(state: AgentState) -> str:
     """Edge condicional: decide si continuar al supervisor o bloquear.
 
-    Si el nodo de seguridad marcó la intención como 'bloqueado', ir a END.
+    Si el nodo de seguridad marco la intencion como 'bloqueado', ir a END.
     Si no, continuar al supervisor.
     """
     if state.get("intencion") == "bloqueado":
@@ -42,23 +39,27 @@ def route_from_security(state: AgentState) -> str:
 
 
 def route_from_supervisor(state: AgentState) -> str:
-    """Edge condicional: decide a qué worker ir según la intención.
+    """Edge condicional: decide a que worker ir segun la intencion.
 
-    Verifica RBAC: si el rol del usuario no tiene permiso para la intención,
+    Verifica RBAC a nivel de intencion. Si el rol no tiene permiso,
     redirige a chat_agent con un mensaje de acceso denegado.
     """
     intencion = state["intencion"]
     role = state.get("role", "empleado")
 
-    # Verificar permisos del rol
-    if not can_access(role, intencion):
-        # El empleado no tiene acceso a esta intención (ej: datos requiere admin)
+    try:
+        has_access = can_access(role, intencion)
+    except ValueError:
+        # Rol desconocido: fail closed
+        return "chat_agent"
+
+    if not has_access:
         return "chat_agent"
 
     routing = {
         "rag": "rag_agent",
         "datos": "data_agent",
-        "accion": "action_agent",
+        "accion": "action_planner",
         "chat": "chat_agent",
     }
 
@@ -66,10 +67,10 @@ def route_from_supervisor(state: AgentState) -> str:
 
 
 def route_from_worker(state: AgentState) -> str:
-    """Edge condicional después del worker: decide si necesita crítico o va directo a END.
+    """Edge condicional despues del worker: decide si necesita critico o va directo a END.
 
-    - Si intención es 'chat' y confidence >= 0.9: respuesta directa, sin crítico (ahorra ~3s)
-    - Resto: pasa por crítico para evaluación de calidad
+    - Si intencion es 'chat' y confidence >= 0.9: respuesta directa, sin critico (ahorra ~3s)
+    - Resto: pasa por critico para evaluacion de calidad
     """
     intencion = state.get("intencion", "chat")
     confidence = state.get("confidence", 1.0)
@@ -79,44 +80,52 @@ def route_from_worker(state: AgentState) -> str:
     return "critic"
 
 
+def route_from_planner(state: AgentState) -> str:
+    """Edge condicional: decide si una accion requiere HITL o puede ejecutarse directo.
+
+    - Si action_plan no existe, termina.
+    - Si risk_level es 'high', pausa para revision humana.
+    - Si es 'low'/'medium', ejecuta directamente.
+    """
+    action_plan = state.get("action_plan")
+    if not action_plan:
+        return END
+
+    risk_level = action_plan.get("risk_level", "low")
+    if risk_level == "high":
+        return "hitl_review"
+    return "action_executor"
+
+
+def route_from_hitl(state: AgentState) -> str:
+    """Edge condicional despues de HITL: ejecuta si fue aprobada, termina si fue rechazada."""
+    action_plan = state.get("action_plan")
+    if action_plan and action_plan.get("approval_status") == "approved":
+        return "action_executor"
+    return END
+
+
 def route_from_critic(state: AgentState) -> str:
     """Edge condicional: decide si la respuesta es final, necesita reintento, o HITL.
 
-    - Si requires_human_review → hitl_review (revisión humana)
-    - Si intención es accion y confidence alta → hitl_review (acciones siempre revisadas)
-    - Si confidence >= 0.7 → END
-    - Si confidence < 0.7 y retries < 2 → volver al worker
-    - Si confidence < 0.7 y retries >= 2 → hitl_review (último recurso)
+    Fase 2: la logica de HITL por acciones ya no depende de frases del LLM.
+    Las acciones son ruteadas por action_plan desde route_from_planner.
+    Este nodo solo maneja reintentos y revision humana por baja confianza.
     """
     confidence = state.get("confidence", 1.0)
     requires_human = state.get("requires_human_review", False)
     retries = state.get("retries", 0)
     intencion = state.get("intencion", "chat")
 
-    # Solo acciones sensibles van a HITL (ej: enviar email)
-    # Tickets (crear/listar/buscar) son acciones rutinarias que no necesitan aprobación
-    # Este check va ANTES del requires_human porque el crítico puede marcar
-    # revisión para acciones por precaución, pero los tickets no la necesitan
-    if intencion == "accion" and confidence >= 0.7:
-        respuesta = state.get("respuesta", "").lower()
-        email_action_patterns = [
-            "email enviado", "correo enviado", "enviado a", "he enviado",
-            "enviado correctamente", "enviado exitosamente",
-            "email ha sido enviado", "correo ha sido enviado",
-        ]
-        if any(p in respuesta for p in email_action_patterns):
-            return "hitl_review"
-        return END
-
-    # Si el crítico marcó revisión humana explícita (y no es acción rutinaria)
+    # Si el critico marco revision humana explicita
     if requires_human:
         return "hitl_review"
 
-    # Si la confianza es alta (y no es accion), la respuesta es buena
+    # Si la confianza es alta, la respuesta es buena
     if confidence >= 0.7:
         return END
 
-    # Si la confianza es baja pero ya agotó los reintentos → revisión humana
+    # Si la confianza es baja pero ya agoto los reintentos -> revision humana
     if retries >= 2:
         return "hitl_review"
 
@@ -124,7 +133,7 @@ def route_from_critic(state: AgentState) -> str:
     routing = {
         "rag": "rag_agent",
         "datos": "data_agent",
-        "accion": "action_agent",
+        "accion": "action_planner",
         "chat": "chat_agent",
     }
 
@@ -144,21 +153,22 @@ def build_graph(checkpointer=None):
     # 1. Crear el grafo con el estado compartido
     graph = StateGraph(AgentState)
 
-    # 2. Añadir nodos
+    # 2. Anadir nodos
     graph.add_node("security", security_node)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("rag_agent", rag_node)
     graph.add_node("data_agent", data_node)
-    graph.add_node("action_agent", action_node)
+    graph.add_node("action_planner", action_planner_node)
+    graph.add_node("action_executor", action_executor_node)
     graph.add_node("chat_agent", chat_node)
     graph.add_node("critic", critic_node)
     graph.add_node("hitl_review", hitl_node)
 
-    # 3. Añadir edges
-    # START → security
+    # 3. Anadir edges
+    # START -> security
     graph.set_entry_point("security")
 
-    # security → (condicional) → supervisor o END (bloqueado)
+    # security -> (condicional) -> supervisor o END (bloqueado)
     graph.add_conditional_edges(
         "security",
         route_from_security,
@@ -168,22 +178,30 @@ def build_graph(checkpointer=None):
         },
     )
 
-    # supervisor → (condicional) → worker
+    # supervisor -> (condicional) -> worker
     graph.add_conditional_edges(
         "supervisor",
         route_from_supervisor,
         {
             "rag_agent": "rag_agent",
             "data_agent": "data_agent",
-            "action_agent": "action_agent",
+            "action_planner": "action_planner",
             "chat_agent": "chat_agent",
         },
     )
 
-    # Cada worker → crítico (excepto chat simple que puede ir directo a END)
+    # Cada worker -> critico (excepto chat simple que puede ir directo a END)
     graph.add_edge("rag_agent", "critic")
     graph.add_edge("data_agent", "critic")
-    graph.add_edge("action_agent", "critic")
+    graph.add_conditional_edges(
+        "action_planner",
+        route_from_planner,
+        {
+            "hitl_review": "hitl_review",
+            "action_executor": "action_executor",
+            END: END,
+        },
+    )
     graph.add_conditional_edges(
         "chat_agent",
         route_from_worker,
@@ -193,22 +211,32 @@ def build_graph(checkpointer=None):
         },
     )
 
-    # crítico → (condicional) → END, worker (reintento), o hitl_review
+    # critico -> (condicional) -> END, worker (reintento), o hitl_review
     graph.add_conditional_edges(
         "critic",
         route_from_critic,
         {
             "rag_agent": "rag_agent",
             "data_agent": "data_agent",
-            "action_agent": "action_agent",
+            "action_planner": "action_planner",
             "chat_agent": "chat_agent",
             "hitl_review": "hitl_review",
             END: END,
         },
     )
 
-    # hitl_review → END (después de la decisión humana, siempre termina)
-    graph.add_edge("hitl_review", END)
+    # hitl_review -> action_executor o END
+    graph.add_conditional_edges(
+        "hitl_review",
+        route_from_hitl,
+        {
+            "action_executor": "action_executor",
+            END: END,
+        },
+    )
+
+    # action_executor -> END
+    graph.add_edge("action_executor", END)
 
     # 4. Compilar y devolver
     return graph.compile(checkpointer=checkpointer)
@@ -219,8 +247,11 @@ _compiled_graph = None
 
 
 def get_graph():
-    """Devuelve el grafo compilado (singleton)."""
+    """Devuelve el grafo compilado (singleton) con checkpointer en memoria.
+
+    El checkpointer es necesario para HITL (interrupt).
+    """
     global _compiled_graph
     if _compiled_graph is None:
-        _compiled_graph = build_graph()
+        _compiled_graph = build_graph(checkpointer=MemorySaver())
     return _compiled_graph

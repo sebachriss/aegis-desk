@@ -4,12 +4,12 @@ Usa un agente ReAct con la herramienta consultar_sql.
 El LLM decide qué query SQL escribir, la ejecuta, e interpreta el resultado.
 """
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 
 from src.agents.state import AgentState
 from src.llm.providers import get_llm
-from src.tools.sql import consultar_sql
+from src.security.rbac import get_allowed_tools, validate_role
 
 SYSTEM_PROMPT = """Eres el agente de datos de Aegis Corp.
 Tu trabajo es responder consultas sobre la base de datos de la empresa.
@@ -24,18 +24,49 @@ Responde de forma clara y concisa en español.
 """
 
 
+def _extract_tool_name(messages: list) -> str | None:
+    """Extrae el nombre de la última tool invocada desde el historial de mensajes."""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            return msg.tool_calls[0].get("name")
+    return None
+
+
 def data_node(state: AgentState) -> dict:
     """Nodo del grafo: responde usando SQL sobre la base de datos.
 
-    Crea un agente ReAct con solo la herramienta consultar_sql,
-    le pasa la pregunta del usuario, y devuelve la respuesta.
+    Aplica RBAC: el agente recibe solo la tool consultar_sql si su rol la permite.
+    Registra el nombre de la tool invocada y la decision de autorizacion.
     """
+    role = state.get("role", "empleado")
+
+    # Fail closed: roles desconocidos no acceden a datos
+    if not validate_role(role):
+        return {
+            "respuesta": "⛔ Rol inválido o no especificado. Contacta al administrador.",
+            "fuentes": [],
+            "tool_name": None,
+            "authorization_decision": "unknown_role",
+            "confidence": 1.0,
+        }
+
+    allowed_tools = get_allowed_tools(role)
+    sql_tools = [t for t in allowed_tools if getattr(t, "name", None) == "consultar_sql"]
+
+    if not sql_tools:
+        return {
+            "respuesta": "⛔ No tienes permiso para consultar la base de datos.",
+            "fuentes": [],
+            "tool_name": "consultar_sql",
+            "authorization_decision": "denied",
+            "confidence": 1.0,
+        }
+
     llm = get_llm(temperature=0)
 
-    # Agente ReAct con SOLO la tool de SQL (no todas las tools)
     agent = create_react_agent(
         model=llm,
-        tools=[consultar_sql],
+        tools=sql_tools,
         prompt=SystemMessage(content=SYSTEM_PROMPT),
     )
 
@@ -45,10 +76,12 @@ def data_node(state: AgentState) -> dict:
         "messages": [HumanMessage(content=query)],
     })
 
-    # El último mensaje es la respuesta final del agente
     respuesta = result["messages"][-1].content
+    tool_name = _extract_tool_name(result["messages"])
 
     return {
         "respuesta": respuesta,
         "fuentes": [{"source": "aegis.db (SQLite)"}],
+        "tool_name": tool_name,
+        "authorization_decision": "allowed",
     }
