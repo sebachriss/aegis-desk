@@ -14,6 +14,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 from src.db.pinecone_store import is_pinecone_configured, upsert_documents as upsert_pinecone
+from src.db.supabase_vector import is_supabase_vector_configured, upsert_documents as upsert_supabase
 from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
 from src.security.prompt_injection import sanitize_input
 
@@ -135,6 +136,13 @@ def create_vectorstore(chunks: list[Document]) -> Chroma:
         ]
         upsert_pinecone(pinecone_docs)
         print("  Pinecone actualizado.")
+
+    if is_supabase_vector_configured():
+        print("  Subiendo chunks a Supabase pgvector...")
+        embeddings_model = LocalEmbeddings()
+        embs = embeddings_model.embed_documents([c.page_content for c in chunks])
+        upsert_supabase(chunks, embs)
+        print("  Supabase pgvector actualizado.")
 
     print(f"  Base de datos creada en: {CHROMA_DIR}")
     print(f"  Total chunks indexados: {len(chunks)}")

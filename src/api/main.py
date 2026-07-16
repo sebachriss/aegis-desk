@@ -32,6 +32,7 @@ from src.agents.graph import build_graph
 from src.auth.jwt_handler import create_access_token, get_current_user, verify_token
 from src.auth.users import authenticate, get_user
 from src.config import get_settings
+from src.db import hitl_queue as hitl_db
 from src.observability.langsmith import setup_langsmith_tracing
 from src.observability.tracing import get_stats, trace_execution
 from src.security.pii_filter import filter_pii
@@ -49,9 +50,31 @@ DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 CHECKPOINT_DB_PATH = DATA_DIR / "checkpoints.sqlite"
-HITL_DB_PATH = DATA_DIR / "hitl_queue.sqlite"
 
-_checkpointer = SqliteSaver(sqlite3.connect(str(CHECKPOINT_DB_PATH), check_same_thread=False))
+
+def _get_checkpointer():
+    """Devuelve el checkpointer adecuado (SQLite local o Postgres/Supabase)."""
+    if settings.database_url:
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+            from src.db.postgres_utils import get_postgres_connection, get_postgres_pool
+
+            # Asegurar tablas del checkpointer (autocommit porque usa CREATE INDEX CONCURRENTLY)
+            with get_postgres_connection() as conn:
+                conn.autocommit = True
+                PostgresSaver(conn).setup()
+
+            pool = get_postgres_pool()
+            return PostgresSaver(pool)
+        except Exception as exc:
+            print(f"Advertencia: fallback a SQLite para checkpointer: {exc}")
+
+    import sqlite3
+
+    return SqliteSaver(sqlite3.connect(str(CHECKPOINT_DB_PATH), check_same_thread=False))
+
+
+_checkpointer = _get_checkpointer()
 _graph = build_graph(checkpointer=_checkpointer)
 
 app = FastAPI(
@@ -82,128 +105,6 @@ app.add_middleware(
     allow_credentials=True,
     expose_headers=["Set-Cookie"],
 )
-
-
-# --- HITL queue helpers ---
-
-
-def _get_hitl_db():
-    """Conexion a la cola HITL persistente. Crea la tabla y migra columnas si es necesario."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(HITL_DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS hitl_queue (
-            thread_id TEXT PRIMARY KEY,
-            status TEXT NOT NULL DEFAULT "pending",
-            query TEXT,
-            intencion TEXT,
-            requested_by TEXT,
-            role TEXT,
-            tool_name TEXT,
-            risk_level TEXT,
-            created_at TEXT,
-            approved_by TEXT,
-            approved_at TEXT,
-            action_plan_json TEXT
-        )"""
-    )
-    # Migrar columnas nuevas en bases existentes
-    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(hitl_queue)")}
-    for col in ("query", "intencion"):
-        if col not in existing_cols:
-            conn.execute(f"ALTER TABLE hitl_queue ADD COLUMN {col} TEXT")
-    conn.commit()
-    return conn
-
-
-def _enqueue_hitl(
-    thread_id: str,
-    query: str,
-    intencion: str,
-    action_plan: dict | None,
-    user: dict,
-):
-    """Agrega una solicitud HITL a la cola persistente."""
-    db = _get_hitl_db()
-    try:
-        now = datetime.now().isoformat()
-        if action_plan:
-            requested_by = action_plan.get("requested_by") or user.get("username")
-            role = action_plan.get("role") or user.get("role")
-            tool_name = action_plan.get("tool_name")
-            risk_level = action_plan.get("risk_level", "unknown")
-            action_plan_json = json.dumps(action_plan, ensure_ascii=False)
-        else:
-            requested_by = user.get("username")
-            role = user.get("role")
-            tool_name = None
-            risk_level = None
-            action_plan_json = None
-        db.execute(
-            """INSERT OR REPLACE INTO hitl_queue
-            (thread_id, status, query, intencion, requested_by, role, tool_name, risk_level, created_at, approved_by, approved_at, action_plan_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                thread_id,
-                "pending",
-                query,
-                intencion,
-                requested_by,
-                role,
-                tool_name,
-                risk_level,
-                now,
-                None,
-                None,
-                action_plan_json,
-            ),
-        )
-        db.commit()
-    finally:
-        db.close()
-
-
-def _update_hitl_status(thread_id: str, status: str, approved_by: str | None = None):
-    """Actualiza el estado de una entrada HITL."""
-    db = _get_hitl_db()
-    try:
-        approved_at = datetime.now().isoformat() if status in ("approved", "rejected") and approved_by else None
-        db.execute(
-            "UPDATE hitl_queue SET status = ?, approved_by = ?, approved_at = ? WHERE thread_id = ?",
-            (status, approved_by, approved_at, thread_id),
-        )
-        db.commit()
-    finally:
-        db.close()
-
-
-def _get_pending_hitl() -> list[dict]:
-    """Devuelve la lista de entradas HITL con estado pending."""
-    db = _get_hitl_db()
-    try:
-        rows = db.execute(
-            """SELECT thread_id, query, intencion, requested_by, role, tool_name,
-                      risk_level, created_at, action_plan_json
-               FROM hitl_queue
-               WHERE status = 'pending'
-               ORDER BY created_at ASC"""
-        ).fetchall()
-        items = []
-        for row in rows:
-            item = dict(row)
-            if not item.get("query") or not item.get("intencion"):
-                # Fallback para entradas antiguas que no tenian query/intencion
-                try:
-                    action_plan = json.loads(item.get("action_plan_json") or "{}")
-                    item.setdefault("query", action_plan.get("query", ""))
-                    item.setdefault("intencion", action_plan.get("intencion", ""))
-                except json.JSONDecodeError:
-                    pass
-            items.append(item)
-        return items
-    finally:
-        db.close()
 
 
 def _validate_hitl_thread(thread_id: str):
@@ -337,28 +238,36 @@ async def health():
     """Health check: SQLite, cola HITL, checkpointer y API keys."""
     checks = {}
 
-    # SQLite/checkpointer
+    # Checkpointer
     try:
-        _checkpointer.conn.execute("SELECT 1").fetchone()
+        if hasattr(_checkpointer.conn, "connection"):
+            # Postgres ConnectionPool
+            with _checkpointer.conn.connection() as conn:
+                conn.execute("SELECT 1")
+        else:
+            # SQLite directo
+            _checkpointer.conn.execute("SELECT 1").fetchone()
         checks["checkpointer"] = "ok"
     except Exception as exc:
         checks["checkpointer"] = f"error: {exc}"
 
-    # Base de checkpoints como archivo SQLite
+    # Base de datos principal
     try:
-        conn = sqlite3.connect(str(CHECKPOINT_DB_PATH), check_same_thread=False)
-        conn.execute("SELECT 1").fetchone()
-        conn.close()
-        checks["sqlite"] = "ok"
+        if settings.database_url:
+            from src.db.postgres_utils import get_postgres_connection
+            with get_postgres_connection() as conn:
+                conn.execute("SELECT 1")
+        else:
+            conn = sqlite3.connect(str(CHECKPOINT_DB_PATH), check_same_thread=False)
+            conn.execute("SELECT 1").fetchone()
+            conn.close()
+        checks["database"] = "ok"
     except Exception as exc:
-        checks["sqlite"] = f"error: {exc}"
+        checks["database"] = f"error: {exc}"
 
     # Cola HITL
     try:
-        db = _get_hitl_db()
-        db.execute("SELECT 1").fetchone()
-        db.close()
-        checks["hitl_queue"] = "ok"
+        checks["hitl_queue"] = hitl_db.health_check()
     except Exception as exc:
         checks["hitl_queue"] = f"error: {exc}"
 
@@ -475,7 +384,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user)):
 
     if is_interrupted:
         # Persistir la solicitud en la cola HITL
-        _enqueue_hitl(
+        hitl_db.enqueue(
             thread_id,
             query=req.query,
             intencion=result.get("intencion", ""),
@@ -531,7 +440,7 @@ async def hitl_pending(user: dict = Depends(require_admin)):
 
     Consulta la cola persistente SQLite.
     """
-    return _get_pending_hitl()
+    return hitl_db.get_pending()
 
 
 @app.post("/hitl/{thread_id}/approve")
@@ -539,7 +448,7 @@ async def hitl_approve(thread_id: str, user: dict = Depends(require_admin)):
     """Aprueba una accion pausada en HITL. Requiere rol admin."""
     _validate_hitl_thread(thread_id)
 
-    _update_hitl_status(thread_id, "approved", approved_by=user.get("username"))
+    hitl_db.update_status(thread_id, "approved", approved_by=user.get("username"))
 
     config = {"configurable": {"thread_id": thread_id}}
     try:
@@ -560,7 +469,7 @@ async def hitl_reject(thread_id: str, user: dict = Depends(require_admin)):
     """Rechaza una accion pausada en HITL. Requiere rol admin."""
     _validate_hitl_thread(thread_id)
 
-    _update_hitl_status(thread_id, "rejected", approved_by=user.get("username"))
+    hitl_db.update_status(thread_id, "rejected", approved_by=user.get("username"))
 
     config = {"configurable": {"thread_id": thread_id}}
     try:

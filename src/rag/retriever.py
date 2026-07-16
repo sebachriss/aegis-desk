@@ -8,6 +8,7 @@ from langchain_chroma import Chroma
 
 from src.config import get_settings
 from src.db.pinecone_store import is_pinecone_configured, search as pinecone_search
+from src.db.supabase_vector import is_supabase_vector_configured, search as supabase_search
 from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
 from src.rag.ingest import CHROMA_DIR
 
@@ -43,6 +44,9 @@ def search(query: str, k: int = 3) -> list[dict]:
     """Busca los k chunks mas relevantes para una pregunta."""
     if is_pinecone_configured():
         return pinecone_search(query, k=k)
+
+    if is_supabase_vector_configured():
+        return supabase_search(query, k=k)
 
     vectorstore = _get_chroma_vectorstore()
     results = vectorstore.similarity_search_with_score(query, k=k)

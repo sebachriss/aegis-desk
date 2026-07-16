@@ -1,17 +1,34 @@
-"""Crea tablas y datos de ejemplo en Postgres/Supabase.
+"""Crea tablas, extensiones y datos de ejemplo en Postgres/Supabase.
 
 Uso:
-    DATABASE_URL=postgresql://... python scripts/migrate_postgres.py
+    python scripts/migrate_postgres.py
+
+Requiere DATABASE_URL en el entorno (.env).
 """
 
 import os
 import sys
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 try:
-    import psycopg2
+    import psycopg
 except ImportError as exc:
-    print("Error: instala psycopg2-binary: pip install psycopg2-binary")
+    print("Error: instala psycopg[binary]: pip install 'psycopg[binary]>=3.0.0'")
     sys.exit(1)
+
+from src.db.postgres_utils import normalize_database_url, get_postgres_connection
+
+
+def _enable_vector(cur):
+    """Habilita la extension pgvector si es posible."""
+    try:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    except psycopg.Error as exc:
+        print(f"Advertencia: no se pudo crear extension vector: {exc}")
+        print("Habilitala manualmente desde Supabase: Database > Extensions > vector")
 
 
 def main() -> None:
@@ -20,9 +37,11 @@ def main() -> None:
         print("Error: define DATABASE_URL o SUPABASE_DATABASE_URL")
         sys.exit(1)
 
-    conn = psycopg2.connect(dsn)
+    conn = get_postgres_connection(dsn)
     try:
         with conn.cursor() as cur:
+            _enable_vector(cur)
+
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS departamentos (
@@ -55,6 +74,42 @@ def main() -> None:
                     created_by TEXT,
                     created_at TEXT
                 )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hitl_queue (
+                    thread_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    query TEXT,
+                    intencion TEXT,
+                    requested_by TEXT,
+                    role TEXT,
+                    tool_name TEXT,
+                    risk_level TEXT,
+                    created_at TEXT,
+                    approved_by TEXT,
+                    approved_at TEXT,
+                    action_plan_json TEXT
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_embeddings (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    source TEXT,
+                    metadata JSONB,
+                    embedding vector(384)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_document_embeddings_embedding
+                ON document_embeddings
+                USING hnsw (embedding vector_cosine_ops)
                 """
             )
 
@@ -92,6 +147,21 @@ def main() -> None:
                 )
 
             conn.commit()
+            print("Tablas base creadas.")
+
+            # Tablas del checkpointer de LangGraph (PostgresSaver) en una conexion aparte
+            # porque algunas migraciones usan CREATE INDEX CONCURRENTLY que no puede
+            # correr dentro de una transaccion.
+            try:
+                from langgraph.checkpoint.postgres import PostgresSaver
+                with psycopg.connect(normalize_database_url(dsn)) as chk_conn:
+                    chk_conn.autocommit = True
+                    saver = PostgresSaver(chk_conn)
+                    saver.setup()
+                    print("Tablas del checkpointer creadas.")
+            except Exception as exc:
+                print(f"Advertencia: no se pudieron crear tablas del checkpointer: {exc}")
+
             print("Migración completada.")
     finally:
         conn.close()
