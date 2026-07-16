@@ -67,15 +67,18 @@ def _init_db():
             prioridad TEXT,
             estado TEXT,
             empleado_id INTEGER,
+            created_by TEXT,
+            created_at TEXT,
             FOREIGN KEY (empleado_id) REFERENCES empleados(id)
         );
     """)
 
-    # Intentar anadir columna descripcion si la tabla existe sin ella (migracion)
-    try:
-        cursor.execute("ALTER TABLE tickets ADD COLUMN descripcion TEXT")
-    except sqlite3.OperationalError:
-        pass
+    # Intentar anadir columnas de migracion si la tabla existe sin ellas
+    for col in ("descripcion", "created_by", "created_at"):
+        try:
+            cursor.execute(f"ALTER TABLE tickets ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass
 
     # Insertar datos de ejemplo solo si las tablas estan vacias
     cursor.execute("SELECT COUNT(*) FROM departamentos")
@@ -102,12 +105,12 @@ def _init_db():
     cursor.execute("SELECT COUNT(*) FROM tickets")
     if cursor.fetchone()[0] == 0:
         cursor.executemany(
-            "INSERT INTO tickets (titulo, prioridad, estado, empleado_id) VALUES (?, ?, ?, ?)",
+            "INSERT INTO tickets (titulo, prioridad, estado, empleado_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             [
-                ("VPN no conecta", "media", "abierto", 1),
-                ("Laptop lenta", "baja", "abierto", 2),
-                ("Email no llega", "alta", "cerrado", 1),
-                ("Solicitud de monitor", "baja", "abierto", 3),
+                ("VPN no conecta", "media", "abierto", 1, "system", "2026-07-16T00:00:00"),
+                ("Laptop lenta", "baja", "abierto", 2, "system", "2026-07-16T00:00:00"),
+                ("Email no llega", "alta", "cerrado", 1, "system", "2026-07-16T00:00:00"),
+                ("Solicitud de monitor", "baja", "abierto", 3, "system", "2026-07-16T00:00:00"),
             ],
         )
 
