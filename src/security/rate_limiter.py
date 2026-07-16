@@ -5,7 +5,11 @@ haga fuerza bruta sobre el endpoint de login.
 """
 
 import time
+import threading
 from collections import defaultdict
+
+# Proteger contadores contra race conditions en el mismo proceso
+_ratelimit_lock = threading.Lock()
 
 # {user_id: [timestamp1, timestamp2, ...]}
 _requests: dict[str, list[float]] = defaultdict(list)
@@ -43,32 +47,35 @@ def check_rate_limit(user_id: str) -> dict:
     """
     now = time.time()
 
-    # Limpiar timestamps fuera de la ventana
-    _requests[user_id] = _clean_window(_requests[user_id], WINDOW_SECONDS)
+    with _ratelimit_lock:
+        # Limpiar timestamps fuera de la ventana
+        _requests[user_id] = _clean_window(_requests[user_id], WINDOW_SECONDS)
 
-    # Contar requests actuales en la ventana
-    current_count = len(_requests[user_id])
+        # Contar requests actuales en la ventana
+        current_count = len(_requests[user_id])
 
-    if current_count >= MAX_REQUESTS:
-        # Calcular cuando podra hacer otra request
-        oldest_in_window = _requests[user_id][0]
-        retry_after = int(oldest_in_window + WINDOW_SECONDS - now)
+        if current_count >= MAX_REQUESTS:
+            # Calcular cuando podra hacer otra request
+            oldest_in_window = _requests[user_id][0]
+            retry_after = int(oldest_in_window + WINDOW_SECONDS - now)
+            return {
+                "allowed": False,
+                "reason": f"Rate limit excedido: {current_count}/{MAX_REQUESTS} requests en {WINDOW_SECONDS}s. Intenta en {retry_after}s.",
+                "requests_in_window": current_count,
+                "limit": MAX_REQUESTS,
+                "retry_after": retry_after,
+            }
+
+        # Registrar esta request
+        _requests[user_id].append(now)
+
         return {
-            "allowed": False,
-            "reason": f"Rate limit excedido: {current_count}/{MAX_REQUESTS} requests en {WINDOW_SECONDS}s. Intenta en {retry_after}s.",
-            "requests_in_window": current_count,
+            "allowed": True,
+            "reason": None,
+            "requests_in_window": current_count + 1,
             "limit": MAX_REQUESTS,
+            "retry_after": 0,
         }
-
-    # Registrar esta request
-    _requests[user_id].append(now)
-
-    return {
-        "allowed": True,
-        "reason": None,
-        "requests_in_window": current_count + 1,
-        "limit": MAX_REQUESTS,
-    }
 
 
 def check_login_rate_limit(ip_or_username: str) -> dict:
@@ -81,28 +88,32 @@ def check_login_rate_limit(ip_or_username: str) -> dict:
         Diccionario con allowed, reason, attempts_in_window, limit.
     """
     now = time.time()
-    _login_attempts[ip_or_username] = _clean_window(
-        _login_attempts[ip_or_username], LOGIN_WINDOW_SECONDS
-    )
-    current_count = len(_login_attempts[ip_or_username])
 
-    if current_count >= MAX_LOGIN_ATTEMPTS:
-        oldest = _login_attempts[ip_or_username][0]
-        retry_after = int(oldest + LOGIN_WINDOW_SECONDS - now)
+    with _ratelimit_lock:
+        _login_attempts[ip_or_username] = _clean_window(
+            _login_attempts[ip_or_username], LOGIN_WINDOW_SECONDS
+        )
+        current_count = len(_login_attempts[ip_or_username])
+
+        if current_count >= MAX_LOGIN_ATTEMPTS:
+            oldest = _login_attempts[ip_or_username][0]
+            retry_after = int(oldest + LOGIN_WINDOW_SECONDS - now)
+            return {
+                "allowed": False,
+                "reason": f"Demasiados intentos de login: {current_count}/{MAX_LOGIN_ATTEMPTS}. Intenta en {retry_after}s.",
+                "attempts_in_window": current_count,
+                "limit": MAX_LOGIN_ATTEMPTS,
+                "retry_after": retry_after,
+            }
+
+        _login_attempts[ip_or_username].append(now)
         return {
-            "allowed": False,
-            "reason": f"Demasiados intentos de login: {current_count}/{MAX_LOGIN_ATTEMPTS}. Intenta en {retry_after}s.",
-            "attempts_in_window": current_count,
+            "allowed": True,
+            "reason": None,
+            "attempts_in_window": current_count + 1,
             "limit": MAX_LOGIN_ATTEMPTS,
+            "retry_after": 0,
         }
-
-    _login_attempts[ip_or_username].append(now)
-    return {
-        "allowed": True,
-        "reason": None,
-        "attempts_in_window": current_count + 1,
-        "limit": MAX_LOGIN_ATTEMPTS,
-    }
 
 
 def reset_user(user_id: str) -> None:

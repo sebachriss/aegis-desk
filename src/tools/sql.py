@@ -115,6 +115,13 @@ def _init_db():
     conn.close()
 
 
+def _has_limit_clause(query: str) -> bool:
+    """Detecta si una query ya tiene una clausula LIMIT final."""
+    # Buscar LIMIT al final, ignorando comentarios simples
+    no_comments = re.sub(r"--[^\n]*", "", query)
+    return bool(re.search(r"\bLIMIT\s+\d+\s*($|;)", no_comments, flags=re.IGNORECASE))
+
+
 def _strip_sql_comments(query: str) -> str:
     """Elimina comentarios SQL de una query.
 
@@ -269,7 +276,9 @@ def consultar_sql(query: str) -> str:
 
         # 3. Ejecutar con LIMIT automatico para evitar tablas grandes
         limited_query = query.strip().rstrip(";")
-        limited_query = f"{limited_query} LIMIT {MAX_ROWS + 1}"
+        # Evitar LIMIT duplicado si la query ya lo incluye
+        if not _has_limit_clause(limited_query):
+            limited_query = f"{limited_query} LIMIT {MAX_ROWS + 1}"
 
         cursor.execute(limited_query)
         rows = cursor.fetchmany(MAX_ROWS + 1)
