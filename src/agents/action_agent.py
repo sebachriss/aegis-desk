@@ -223,8 +223,8 @@ def action_executor_node(state: AgentState) -> dict:
     tool = TOOLS[tool_name]
     arguments = action_plan.get("arguments", {})
 
-    # Inyectar ownership/auditoria para tools de tickets
-    if tool_name in {"crear_ticket", "listar_tickets"}:
+    # Inyectar ownership/auditoria solo al crear tickets
+    if tool_name == "crear_ticket":
         arguments = dict(arguments)
         if "created_by" in tool.args and not arguments.get("created_by"):
             arguments["created_by"] = state.get("user_id", "unknown")

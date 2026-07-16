@@ -40,6 +40,7 @@ Tu trabajo es evaluar la respuesta que dio un worker a la pregunta del usuario.
 Criterios:
 1. ¿La respuesta aborda directamente la pregunta?
 2. ¿Es factually correcta según las fuentes proporcionadas (si las hay)?
+   - Una respuesta del tipo "No tengo información sobre eso en los documentos disponibles" es CORRECTA y ÚTIL cuando ninguna fuente contiene la respuesta exacta. No marques como incorrecta ni pidas reintento en ese caso.
 3. ¿Es clara y útil para el usuario?
 
 Si la respuesta es buena, confidence alta (>= 0.7) y necesita_reintento = False.
