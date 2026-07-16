@@ -42,6 +42,11 @@ INJECTION_PATTERNS = [
     r"<\s*system\s*>",
     r"<\s*instruction\s*>",
 
+    # Inyección indirecta vía HTML/markdown o "ignore above"
+    r"<\s*!?--.*?--\s*>",
+    r"ignore\s+(the\s+)?above.*?(reveal|show|print)",
+    r"ignora\s+(lo\s+)?anterior.*?(revela|muestra|imprime)",
+
     # SQL injection destructivo
     r"\bDROP\s+(TABLE|DATABASE)\b",
     r"\bDELETE\s+FROM\b",
@@ -87,11 +92,13 @@ def detect_prompt_injection(text: str) -> dict:
 def sanitize_input(text: str) -> str:
     """Escapa etiquetas que podrían interpretarse como instrucciones de sistema.
 
-    Reemplaza [SYSTEM], <system>, etc. con texto plano inofensivo.
+    Reemplaza [SYSTEM], <system>, comentarios HTML inyectados, etc. con texto plano inofensivo.
     """
     sanitized = text
     sanitized = re.sub(r"\[SYSTEM\]", "[BLOQUEADO]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"\[ADMIN\]", "[BLOQUEADO]", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<\s*system\s*>", "&lt;system&gt;", sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r"<\s*instruction\s*>", "&lt;instruction&gt;", sanitized, flags=re.IGNORECASE)
+    # Eliminar comentarios HTML (posible inyección indirecta en RAG)
+    sanitized = re.sub(r"<!--.*?-->", "", sanitized, flags=re.DOTALL | re.IGNORECASE)
     return sanitized

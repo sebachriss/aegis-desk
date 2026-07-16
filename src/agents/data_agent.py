@@ -20,7 +20,15 @@ Tablas disponibles:
   - tickets (id, titulo, prioridad, estado, empleado_id)
 
 Usa la herramienta consultar_sql para ejecutar consultas SELECT.
-Responde de forma clara y concisa en español.
+Reglas:
+- Responde de forma clara y concisa en español.
+- Si el resultado contiene valores redactados (***), NO inventes el dato original. Simplemente indica que esa información está oculta por privacidad y responde con lo que sí puedes decir (por ejemplo, el nombre).
+
+Ejemplos de consultas:
+- "¿Cuántos empleados hay en Ventas?" -> SELECT COUNT(*) AS total FROM empleados WHERE departamento_id = (SELECT id FROM departamentos WHERE nombre = 'Ventas')
+- "¿Cuántos empleados hay en total?" -> SELECT COUNT(*) AS total FROM empleados
+- "¿Quién gana más?" -> SELECT nombre, salario FROM empleados ORDER BY salario DESC LIMIT 1
+- "¿Cuántos tickets cerrados hay?" -> SELECT COUNT(*) AS total FROM tickets WHERE estado = 'cerrado'
 """
 
 
@@ -30,6 +38,15 @@ def _extract_tool_name(messages: list) -> str | None:
         if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
             return msg.tool_calls[0].get("name")
     return None
+
+
+def _extract_tool_result(messages: list) -> str:
+    """Extrae el contenido del último ToolMessage para pasarlo como fuente al crítico."""
+    for msg in reversed(messages):
+        # ToolMessage en LangChain tiene atributo 'content' y 'name'
+        if getattr(msg, "type", None) == "tool" or getattr(msg, "__class__", "").__name__ == "ToolMessage":
+            return str(getattr(msg, "content", ""))
+    return ""
 
 
 def data_node(state: AgentState) -> dict:
@@ -79,9 +96,14 @@ def data_node(state: AgentState) -> dict:
     respuesta = result["messages"][-1].content
     tool_name = _extract_tool_name(result["messages"])
 
+    tool_result = _extract_tool_result(result["messages"])
+    fuentes = [{"source": "aegis.db (SQLite)"}]
+    if tool_result:
+        fuentes.append({"source": "consultar_sql", "content": tool_result[:1000]})
+
     return {
         "respuesta": respuesta,
-        "fuentes": [{"source": "aegis.db (SQLite)"}],
+        "fuentes": fuentes,
         "tool_name": tool_name,
         "authorization_decision": "allowed",
     }

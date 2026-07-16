@@ -11,84 +11,95 @@ Decisión:
   - Si confidence < 0.7 y retries >= 2: marcar para revisión humana
 """
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+import json
+import re
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from src.config import get_settings
+from src.llm.providers import get_llm
 from src.agents.state import AgentState
-from src.llm.providers import get_fast_llm
 
 MAX_RETRIES = 2
 
-
-class EvaluacionCritico(BaseModel):
-    """Evaluacion de la respuesta del worker."""
-
-    confidence: float = Field(
-        description="Confianza en que la respuesta es correcta y completa, de 0.0 a 1.0",
-    )
-    razon: str = Field(
-        description="Razon breve de la evaluacion",
-    )
-    necesita_reintento: bool = Field(
-        description="True si la respuesta no es buena y el worker deberia intentar de nuevo",
-    )
-
-
 SYSTEM_PROMPT = """Eres el agente crítico de Aegis Desk.
-Tu trabajo es evaluar la respuesta que dio un worker a la pregunta del usuario.
+Tienes acceso a la PREGUNTA del usuario, la RESPUESTA del worker y las FUENTES utilizadas (incluyendo el resultado crudo de la base de datos o los documentos RAG).
+
+Tu trabajo es evaluar si la respuesta es correcta y útil.
 
 Criterios:
 1. ¿La respuesta aborda directamente la pregunta?
-2. ¿Es factually correcta según las fuentes proporcionadas (si las hay)?
-   - Una respuesta del tipo "No tengo información sobre eso en los documentos disponibles" es CORRECTA y ÚTIL cuando ninguna fuente contiene la respuesta exacta. No marques como incorrecta ni pidas reintento en ese caso.
+2. ¿Es factually correcta según las fuentes proporcionadas?
+   - Si la fuente es una consulta SQL, la respuesta debe coincidir con los datos de la fuente.
+   - Una respuesta del tipo "No tengo información sobre eso en los documentos disponibles" es CORRECTA cuando ninguna fuente contiene la respuesta.
 3. ¿Es clara y útil para el usuario?
 
-Si la respuesta es buena, confidence alta (>= 0.7) y necesita_reintento = False.
-Si la respuesta es incompleta, incorrecta, o no responde la pregunta, confidence baja y necesita_reintento = True.
-
-Responde en formato JSON con los campos: confidence, razon, necesita_reintento.
+Responde ÚNICAMENTE con un JSON con esta estructura exacta (sin comentarios, sin Markdown, sin texto extra):
+{
+  "confidence": <float entre 0.0 y 1.0>,
+  "razon": <string breve>
+}
 """
 
 
-def critic_node(state: AgentState) -> dict:
-    """Nodo del grafo: evalúa la respuesta del worker.
+def _extract_json(text: str) -> dict:
+    """Extrae el primer objeto JSON de la respuesta del LLM."""
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError("No se encontró JSON en la respuesta")
+    return json.loads(match.group())
 
-    Lee state["query"] y state["respuesta"], las evalúa, y decide:
-    - Si es buena: confidence alta, no necesita reintento.
-    - Si es mala y hay retries disponibles: marcar para reintento.
-    - Si es mala y no hay retries: marcar para revisión humana.
-    """
-    llm = get_fast_llm(model="llama-3.3-70b-versatile")
-    llm_estructurado = llm.with_structured_output(EvaluacionCritico, method="function_calling")
+
+def critic_node(state: AgentState) -> dict:
+    """Nodo del grafo: evalúa la respuesta del worker."""
+    settings = get_settings()
+    # Usar el modelo principal de DeepInfra para mayor fiabilidad en la evaluación.
+    llm = get_llm(
+        provider="deepinfra",
+        model=settings.deepinfra_model,
+        temperature=0,
+        max_tokens=256,
+    )
 
     query = state["query"]
     respuesta = state["respuesta"]
     fuentes = state.get("fuentes", [])
     retries = state.get("retries", 0)
 
-    # Construir contexto para el crítico
     fuentes_texto = ""
     if fuentes:
         fuentes_texto = "\n\nFuentes usadas:\n"
         for f in fuentes:
-            fuentes_texto += f"- {f.get('source', 'desconocido')}\n"
+            source = f.get("source", "desconocido")
+            content = f.get("content", "")
+            if content:
+                fuentes_texto += f"- {source}: {content}\n"
+            else:
+                fuentes_texto += f"- {source}\n"
 
     mensaje = f"""Pregunta del usuario: {query}
 
 Respuesta del worker: {respuesta}
 {fuentes_texto}
 
-Evalúa esta respuesta."""
+Evalúa esta respuesta y devuelve SOLO el JSON."""
 
-    result = llm_estructurado.invoke([
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=mensaje),
-    ])
+    raw = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=mensaje)]).content
 
-    # Lógica de decisión
-    confidence = result.confidence
-    needs_retry = result.necesita_reintento and retries < MAX_RETRIES
-    requires_human = result.necesita_reintento and retries >= MAX_RETRIES
+    try:
+        result = _extract_json(raw)
+    except Exception:
+        return {
+            "confidence": 0.0,
+            "requires_human_review": False,
+            "retries": retries + 1 if retries < MAX_RETRIES else retries,
+        }
+
+    confidence = float(result.get("confidence", 0.0))
+    is_acceptable = confidence >= 0.7
+
+    needs_retry = not is_acceptable and retries < MAX_RETRIES
+    requires_human = not is_acceptable and retries >= MAX_RETRIES
 
     return {
         "confidence": confidence,
