@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Shield, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -12,7 +11,6 @@ import { toast } from "sonner";
 
 export default function LoginPage() {
   const { login } = useAuth();
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -23,7 +21,7 @@ export default function LoginPage() {
     try {
       await login(username, password);
       toast.success("Bienvenido a Aegis Desk");
-    } catch (err) {
+    } catch {
       toast.error("Usuario o contraseña incorrectos");
     } finally {
       setLoading(false);

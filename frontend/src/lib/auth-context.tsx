@@ -1,8 +1,8 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { createContext, useContext, useState, ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { login as apiLogin, getMe, type User } from "@/lib/api";
+import { login as apiLogin, type User } from "@/lib/api";
 
 interface AuthContextType {
   user: User | null;
@@ -15,20 +15,21 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const router = useRouter();
-
-  useEffect(() => {
-    const savedToken = localStorage.getItem("aegis_token");
-    const savedUser = localStorage.getItem("aegis_user");
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      setUser(JSON.parse(savedUser));
+  const [token, setToken] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("aegis_token");
     }
-    setIsLoading(false);
-  }, []);
+    return null;
+  });
+  const [user, setUser] = useState<User | null>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("aegis_user");
+      return saved ? JSON.parse(saved) : null;
+    }
+    return null;
+  });
+  const [isLoading] = useState(false);
+  const router = useRouter();
 
   const login = async (username: string, password: string) => {
     const res = await apiLogin(username, password);

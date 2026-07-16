@@ -44,3 +44,7 @@ evals/results/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Checkpointer y cola HITL (se regeneran)
+data/checkpoints.sqlite*
+data/hitl_queue.sqlite*
