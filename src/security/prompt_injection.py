@@ -41,6 +41,13 @@ INJECTION_PATTERNS = [
     r"\[ADMIN\]",
     r"<\s*system\s*>",
     r"<\s*instruction\s*>",
+
+    # SQL injection destructivo
+    r"DROP\s+(TABLE|DATABASE)",
+    r"DELETE\s+FROM",
+    r"INSERT\s+INTO",
+    r"UPDATE\s+\w+\s+SET",
+    r"ALTER\s+TABLE.*DROP",
 ]
 
 # Compilar todas las regex case-insensitive
