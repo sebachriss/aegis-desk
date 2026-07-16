@@ -10,6 +10,9 @@ Roles:
 
 from src.tools.registry import TOOLS
 
+# Roles válidos del sistema
+VALID_ROLES = {"empleado", "admin"}
+
 # Permisos por rol: lista de nombres de tools permitidas
 ROLE_PERMISSIONS = {
     "empleado": [
@@ -33,6 +36,18 @@ ROLE_INTENTIONS = {
 }
 
 
+def validate_role(role: str) -> bool:
+    """Devuelve True si el rol es conocido y válido.
+
+    Args:
+        role: Valor a validar.
+
+    Returns:
+        True si el rol está en VALID_ROLES.
+    """
+    return role in VALID_ROLES
+
+
 def get_allowed_tools(role: str) -> list:
     """Devuelve las herramientas permitidas para un rol.
 
@@ -41,7 +56,12 @@ def get_allowed_tools(role: str) -> list:
 
     Returns:
         Lista de funciones @tool permitidas para ese rol.
+
+    Raises:
+        ValueError: Si el rol no es válido.
     """
+    if not validate_role(role):
+        raise ValueError(f"Rol desconocido: {role}. Roles válidos: {sorted(VALID_ROLES)}")
     allowed_names = ROLE_PERMISSIONS.get(role, [])
     return [TOOLS[name] for name in allowed_names if name in TOOLS]
 
@@ -54,8 +74,13 @@ def get_allowed_intentions(role: str) -> list[str]:
 
     Returns:
         Lista de intenciones permitidas: ["rag", "accion", "chat", ...]
+
+    Raises:
+        ValueError: Si el rol no es válido.
     """
-    return ROLE_INTENTIONS.get(role, ["chat"])
+    if not validate_role(role):
+        raise ValueError(f"Rol desconocido: {role}. Roles válidos: {sorted(VALID_ROLES)}")
+    return ROLE_INTENTIONS.get(role, [])
 
 
 def can_access(role: str, intention: str) -> bool:
@@ -67,6 +92,9 @@ def can_access(role: str, intention: str) -> bool:
 
     Returns:
         True si el rol tiene permiso, False si no.
+
+    Raises:
+        ValueError: Si el rol no es válido.
     """
     allowed = get_allowed_intentions(role)
     return intention in allowed

@@ -15,25 +15,32 @@ def main():
         ("Crea un ticket de alta prioridad para el servidor caido", "accion"),
         ("Hola, que tal?", "chat"),
     ]
+    roles = ["empleado", "admin", "empleado", "empleado"]
 
     graph = get_graph()
 
-    for pregunta, expected in preguntas:
+    for i, ((pregunta, expected), role) in enumerate(zip(preguntas, roles)):
         print(f"\n{'=' * 60}")
         print(f"Usuario: {pregunta}")
         print(f"Esperado: {expected}")
         print(f"{'=' * 60}")
 
-        result = graph.invoke({
-            "messages": [],
-            "query": pregunta,
-            "intencion": "",
-            "respuesta": "",
-            "fuentes": [],
-            "confidence": 0.0,
-            "requires_human_review": False,
-            "retries": 0,
-        })
+        thread_id = f"test-multi-{i}"
+        result = graph.invoke(
+            {
+                "messages": [],
+                "query": pregunta,
+                "user_id": "test_user",
+                "role": role,
+                "intencion": "",
+                "respuesta": "",
+                "fuentes": [],
+                "confidence": 0.0,
+                "requires_human_review": False,
+                "retries": 0,
+            },
+            config={"configurable": {"thread_id": thread_id}},
+        )
 
         print(f"\n  Intencion: {result['intencion']}")
         print(f"  Confidence: {result.get('confidence', 'N/A')}")

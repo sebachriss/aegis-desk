@@ -1,11 +1,15 @@
 """Herramienta de consulta SQL sobre SQLite (solo SELECT, allowlist de tablas).
 
 Seguridad:
-  - Solo permite SELECT (no INSERT, UPDATE, DELETE, DROP, etc.)
-  - Solo permite tablas en la allowlist
-  - Limita el numero de filas devueltas
+  - Conexion SQLite en modo solo lectura (file URI mode=ro).
+  - set_authorizer denega cualquier operacion distinta de SELECT/READ.
+  - Solo permite lectura de tablas en ALLOWED_TABLES.
+  - Bloquea sqlite_master, sqlite_sequence, pragmas y funciones peligrosas.
+  - Valida que la query sea SELECT y rechaza comentarios/stacked queries.
+  - Limita filas devueltas y aplica timeout.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -17,8 +21,20 @@ DB_PATH = Path(__file__).parent.parent.parent / "data" / "aegis.db"
 # Tablas permitidas — si no esta aqui, no se puede consultar
 ALLOWED_TABLES = {"empleados", "tickets", "departamentos"}
 
+# Columnas sensibles que se redactan por defecto en los resultados
+SENSITIVE_COLUMNS = {"email", "salario"}
+
 # Maximo de filas que una query puede devolver
 MAX_ROWS = 50
+
+# Tiempo maximo de ejecucion de una query (segundos)
+QUERY_TIMEOUT = 5
+
+
+SQL_KEYWORDS_DENY = {
+    "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE",
+    "ATTACH", "DETACH", "PRAGMA", "VACUUM", "REINDEX", "REPLACE", "MERGE",
+}
 
 
 def _init_db():
@@ -47,12 +63,19 @@ def _init_db():
         CREATE TABLE IF NOT EXISTS tickets (
             id INTEGER PRIMARY KEY,
             titulo TEXT NOT NULL,
+            descripcion TEXT,
             prioridad TEXT,
             estado TEXT,
             empleado_id INTEGER,
             FOREIGN KEY (empleado_id) REFERENCES empleados(id)
         );
     """)
+
+    # Intentar anadir columna descripcion si la tabla existe sin ella (migracion)
+    try:
+        cursor.execute("ALTER TABLE tickets ADD COLUMN descripcion TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # Insertar datos de ejemplo solo si las tablas estan vacias
     cursor.execute("SELECT COUNT(*) FROM departamentos")
@@ -92,6 +115,128 @@ def _init_db():
     conn.close()
 
 
+def _strip_sql_comments(query: str) -> str:
+    """Elimina comentarios SQL de una query.
+
+    No es un parser completo, pero elimina patrones simples de -- y /* */.
+    """
+    query = re.sub(r"/\*.*?\*/", "", query, flags=re.DOTALL)
+    query = re.sub(r"--[^\n]*", "", query)
+    return query
+
+
+def _validate_select(query: str) -> str | None:
+    """Valida que la query sea un SELECT y no contenga palabras peligrosas.
+
+    Returns:
+        Mensaje de error si no es valida, None si es valida.
+    """
+    cleaned = _strip_sql_comments(query).strip()
+    if not cleaned:
+        return "Error: La consulta esta vacia o solo contiene comentarios."
+
+    # Detectar múltiples statements separados por punto y coma
+    if cleaned.count(";") > 0:
+        return "Error: No se permiten múltiples sentencias SQL."
+
+    first_word = re.split(r"\s+", cleaned, maxsplit=1)[0].upper()
+    if first_word != "SELECT":
+        return f"Error: Solo se permiten consultas SELECT. Palabra inicial: {first_word}"
+
+    upper = cleaned.upper()
+    for keyword in SQL_KEYWORDS_DENY:
+        if keyword in upper:
+            return f"Error: '{keyword}' no esta permitido. Solo SELECT."
+
+    return None
+
+
+def _authorizer(action: int, arg1: str | None, arg2: str | None, dbname: str, trigger: str) -> int:
+    """Callback de autorizacion de SQLite.
+
+    Permite:
+      - SQLITE_SELECT (inicio de SELECT)
+      - SQLITE_READ sobre tablas en ALLOWED_TABLES
+    Deniega todo lo demas.
+    """
+    # Permitir la operacion SELECT en si misma
+    if action == sqlite3.SQLITE_SELECT:
+        return sqlite3.SQLITE_OK
+
+    # Permitir lectura de columnas solo de tablas permitidas
+    if action == sqlite3.SQLITE_READ:
+        table = arg1
+        if table in ALLOWED_TABLES:
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+
+    # Denegar funciones no aprobadas y acceso a sqlite_master/sequence
+    # Las funciones de lectura no modifican datos, pero las restringimos a un allowlist.
+    if action == sqlite3.SQLITE_FUNCTION:
+        # arg2 contiene el nombre de la funcion; arg1 es argumento/columna
+        func_name = (arg2 or arg1 or "").upper()
+        allowed = {"COUNT", "SUM", "AVG", "MIN", "MAX", "ROUND", "LENGTH", "UPPER", "LOWER"}
+        if func_name in allowed or func_name.endswith(")"):
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+
+    if action in (
+        sqlite3.SQLITE_INSERT,
+        sqlite3.SQLITE_UPDATE,
+        sqlite3.SQLITE_DELETE,
+        sqlite3.SQLITE_CREATE_TABLE,
+        sqlite3.SQLITE_CREATE_INDEX,
+        sqlite3.SQLITE_CREATE_VIEW,
+        sqlite3.SQLITE_CREATE_TRIGGER,
+        sqlite3.SQLITE_CREATE_TEMP_TABLE,
+        sqlite3.SQLITE_DROP_TABLE,
+        sqlite3.SQLITE_DROP_INDEX,
+        sqlite3.SQLITE_DROP_VIEW,
+        sqlite3.SQLITE_DROP_TRIGGER,
+        sqlite3.SQLITE_DROP_TEMP_TABLE,
+        sqlite3.SQLITE_ALTER_TABLE,
+        sqlite3.SQLITE_ANALYZE,
+        sqlite3.SQLITE_PRAGMA,
+        sqlite3.SQLITE_TRANSACTION,
+        sqlite3.SQLITE_ATTACH,
+        sqlite3.SQLITE_DETACH,
+        sqlite3.SQLITE_REINDEX,
+    ):
+        return sqlite3.SQLITE_DENY
+
+    # Por defecto permitir operaciones de lectura inocuas (ej. SQLITE_ROW)
+    if action == sqlite3.SQLITE_ROW:
+        return sqlite3.SQLITE_OK
+
+    return sqlite3.SQLITE_DENY
+
+
+def _is_sensitive(column: str) -> bool:
+    return column.lower() in SENSITIVE_COLUMNS
+
+
+def _format_rows(rows: list, columns: list[str], mask_sensitive: bool = True) -> str:
+    """Formatea filas como tabla, redactando columnas sensibles si aplica."""
+    display_columns = columns
+    display_rows = []
+    for row in rows:
+        new_row = []
+        for col, val in zip(columns, row):
+            if mask_sensitive and _is_sensitive(col):
+                new_row.append("***")
+            else:
+                new_row.append(str(val) if val is not None else "NULL")
+        display_rows.append(new_row)
+
+    header = " | ".join(display_columns)
+    separator = "-+-".join("-" * len(c) for c in display_columns)
+    lines = [header, separator]
+    for row in display_rows:
+        lines.append(" | ".join(row))
+
+    return f"Resultados ({len(rows)} filas):\n" + "\n".join(lines)
+
+
 @tool
 def consultar_sql(query: str) -> str:
     """Ejecuta una consulta SQL de solo lectura (SELECT) sobre la base de datos de Aegis Corp.
@@ -107,47 +252,41 @@ def consultar_sql(query: str) -> str:
     Returns:
         Resultados de la consulta formateados, o mensaje de error si la query es invalida.
     """
-    # Asegurar que la DB existe
+    # Asegurar que la DB existe (solo la primera vez)
     _init_db()
 
-    # 1. Validar que sea SELECT
-    query_upper = query.strip().upper()
-    if not query_upper.startswith("SELECT"):
-        return "Error: Solo se permiten consultas SELECT."
+    # 1. Validacion textual rapida
+    error = _validate_select(query)
+    if error:
+        return error
 
-    # 2. Validar que no tenga palabras peligrosas
-    palabras_prohibidas = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE"]
-    for palabra in palabras_prohibidas:
-        if palabra in query_upper:
-            return f"Error: '{palabra}' no esta permitido. Solo SELECT."
-
-    # 3. Validar que solo use tablas permitidas
-    for tabla in ALLOWED_TABLES:
-        pass  # la validacion real se hace con el error de SQLite
-
-    # 4. Ejecutar la query
+    # 2. Abrir conexion en modo SOLO LECTURA
+    uri = f"file:{DB_PATH}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=QUERY_TIMEOUT)
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn.set_authorizer(_authorizer)
         cursor = conn.cursor()
 
-        # Limitar el numero de filas
-        cursor.execute(query)
-        rows = cursor.fetchmany(MAX_ROWS)
-        columns = [desc[0] for desc in cursor.description]
+        # 3. Ejecutar con LIMIT automatico para evitar tablas grandes
+        limited_query = query.strip().rstrip(";")
+        limited_query = f"{limited_query} LIMIT {MAX_ROWS + 1}"
 
-        conn.close()
+        cursor.execute(limited_query)
+        rows = cursor.fetchmany(MAX_ROWS + 1)
+        columns = [desc[0] for desc in cursor.description or []]
 
         if not rows:
             return "La consulta no devolvio resultados."
 
-        # Formatear resultados como tabla
-        header = " | ".join(columns)
-        separator = "-+-".join("-" * len(c) for c in columns)
-        lineas = [header, separator]
-        for row in rows:
-            lineas.append(" | ".join(str(v) for v in row))
+        truncated = len(rows) > MAX_ROWS
+        rows = rows[:MAX_ROWS]
 
-        return f"Resultados ({len(rows)} filas):\n" + "\n".join(lineas)
+        result = _format_rows(rows, columns, mask_sensitive=True)
+        if truncated:
+            result += f"\n... (limite de {MAX_ROWS} filas alcanzado)"
 
+        return result
     except sqlite3.Error as e:
         return f"Error de SQL: {e}"
+    finally:
+        conn.close()

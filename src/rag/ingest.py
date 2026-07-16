@@ -14,6 +14,8 @@ from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 
+from src.security.prompt_injection import sanitize_input
+
 # Ruta donde se guardan los documentos fuente
 DOCUMENTS_DIR = Path(__file__).parent / "documents"
 
@@ -58,6 +60,8 @@ def load_documents() -> list[Document]:
 
     for file_path in sorted(DOCUMENTS_DIR.glob("*.md")):
         content = file_path.read_text(encoding="utf-8")
+        # Fase 5/6: sanitizar inyecciones de prompt antes de indexar (RAG poisoning)
+        content = sanitize_input(content)
         doc = Document(
             page_content=content,
             metadata={"source": file_path.name},

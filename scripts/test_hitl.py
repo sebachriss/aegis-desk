@@ -1,13 +1,10 @@
-"""Script de prueba: HITL (Human-in-the-Loop) con interrupt.
+"""Script de prueba: HITL (Human-in-the-Loop) con action_plan estructurado.
 
-Demuestra:
-1. Una acción (crear ticket) pasa por HITL → el humano aprueba
-2. Una acción pasa por HITL → el humano rechaza
-3. Una pregunta RAG no pasa por HITL (no es sensible)
-
-HITL usa interrupt() de LangGraph que pausa el grafo.
-Para reanudar, usamos Command(resume="approve"|"reject").
-Necesitamos un checkpointer (MemorySaver) para guardar el estado al pausar.
+Demuestra Fase 2 (SEC-02):
+1. Admin pide enviar email -> planner genera action_plan de riesgo 'high'
+   -> grafo se pausa en hitl_node -> humano APRUEBA -> action_executor ejecuta.
+2. Admin pide enviar email -> humano RECHAZA -> action_executor no corre.
+3. Empleado pide crear ticket -> riesgo 'low' -> no pasa por HITL.
 """
 
 import sys
@@ -23,112 +20,115 @@ from src.agents.graph import build_graph
 
 
 def main():
-    # HITL requiere checkpointer para guardar estado al pausar
     checkpointer = MemorySaver()
     graph = build_graph(checkpointer=checkpointer)
 
-    # --- Test 1: Acción aprobada por humano ---
+    # --- Test 1: Email aprobado por humano ---
     print(f"\n{'=' * 60}")
-    print("TEST 1: Crear ticket — humano APRUEBA")
+    print("TEST 1: Enviar email — humano APRUEBA")
     print(f"{'=' * 60}")
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    # Primera invocación — el grafo se pausa en hitl_node (interrupt)
-    print("\n  Iniciando grafo (se pausará en HITL)...")
-    result = graph.invoke({
-        "messages": [],
-        "query": "Crea un ticket de alta prioridad para el servidor caido",
-        "user_id": "test_user",
-        "role": "admin",
-        "intencion": "",
-        "respuesta": "",
-        "fuentes": [],
-        "confidence": 0.0,
-        "requires_human_review": False,
-        "retries": 0,
-    }, config=config)
+    print("\n  Iniciando grafo (deberia pausarse en HITL)...")
+    result = graph.invoke(
+        {
+            "messages": [],
+            "query": "Envia un email a rrhh@aegiscorp.com con asunto 'Solicitud de aumento'",
+            "user_id": "admin_test",
+            "role": "admin",
+            "intencion": "",
+            "respuesta": "",
+            "fuentes": [],
+            "confidence": 0.0,
+            "requires_human_review": False,
+            "retries": 0,
+        },
+        config=config,
+    )
 
-    # El grafo se pausó — revisar el estado
-    # __interrupt__ contiene la info que interrupt() envió
     interrupt_info = result.get("__interrupt__")
     if interrupt_info:
-        print(f"\n  ⏸️  GRAFO PAUSADO — esperando aprobación humana")
-        print(f"  Resumen enviado al revisor:")
-        # interrupt_info es una tupla de Interrupt objects
+        print("\n  ⏸️  GRAFO PAUSADO — esperando aprobacion humana")
         for item in interrupt_info:
-            print(f"  {item.value[:200]}")
+            print(f"  {item.value[:250]}")
 
-        # Simular aprobación del humano
-        print(f"\n  ✅ Humano aprueba...")
+        print("\n  ✅ Humano aprueba...")
         result = graph.invoke(Command(resume="approve"), config=config)
     else:
-        print("  (No se pausó — el flujo terminó sin HITL)")
+        print("  (No se pauso — el flujo termino sin HITL)")
 
     print(f"\n  Respuesta final: {result.get('respuesta', 'N/A')[:150]}")
+    print(f"  Estado ejecucion: {result.get('action_plan', {}).get('execution_status')}")
 
-    # --- Test 2: Acción rechazada por humano ---
+    # --- Test 2: Email rechazado por humano ---
     print(f"\n{'=' * 60}")
-    print("TEST 2: Crear ticket — humano RECHAZA")
+    print("TEST 2: Enviar email — humano RECHAZA")
     print(f"{'=' * 60}")
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    print("\n  Iniciando grafo (se pausará en HITL)...")
-    result = graph.invoke({
-        "messages": [],
-        "query": "Crea un ticket de baja prioridad para monitor roto",
-        "user_id": "test_user",
-        "role": "admin",
-        "intencion": "",
-        "respuesta": "",
-        "fuentes": [],
-        "confidence": 0.0,
-        "requires_human_review": False,
-        "retries": 0,
-    }, config=config)
+    print("\n  Iniciando grafo (deberia pausarse en HITL)...")
+    result = graph.invoke(
+        {
+            "messages": [],
+            "query": "Envia un email a rrhh@aegiscorp.com con asunto 'Solicitud de aumento'",
+            "user_id": "admin_test",
+            "role": "admin",
+            "intencion": "",
+            "respuesta": "",
+            "fuentes": [],
+            "confidence": 0.0,
+            "requires_human_review": False,
+            "retries": 0,
+        },
+        config=config,
+    )
 
     interrupt_info = result.get("__interrupt__")
     if interrupt_info:
-        print(f"\n  ⏸️  GRAFO PAUSADO — esperando aprobación humana")
+        print("\n  ⏸️  GRAFO PAUSADO — esperando aprobacion humana")
 
-        # Simular rechazo del humano
-        print(f"\n  ❌ Humano rechaza...")
+        print("\n  ❌ Humano rechaza...")
         result = graph.invoke(Command(resume="reject"), config=config)
     else:
-        print("  (No se pausó — el flujo terminó sin HITL)")
+        print("  (No se pauso — el flujo termino sin HITL)")
 
     print(f"\n  Respuesta final: {result.get('respuesta', 'N/A')[:150]}")
+    print(f"  Estado aprobacion: {result.get('action_plan', {}).get('approval_status')}")
 
-    # --- Test 3: Pregunta RAG — no pasa por HITL ---
+    # --- Test 3: Crear ticket (low risk) no pasa por HITL ---
     print(f"\n{'=' * 60}")
-    print("TEST 3: Pregunta RAG — NO requiere HITL")
+    print("TEST 3: Crear ticket — NO requiere HITL")
     print(f"{'=' * 60}")
 
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    print("\n  Iniciando grafo (no debería pausarse)...")
-    result = graph.invoke({
-        "messages": [],
-        "query": "¿Cuantos dias de vacaciones tengo?",
-        "user_id": "test_user",
-        "role": "empleado",
-        "intencion": "",
-        "respuesta": "",
-        "fuentes": [],
-        "confidence": 0.0,
-        "requires_human_review": False,
-        "retries": 0,
-    }, config=config)
+    print("\n  Iniciando grafo (no deberia pausarse)...")
+    result = graph.invoke(
+        {
+            "messages": [],
+            "query": "Crea un ticket de alta prioridad para el servidor caido",
+            "user_id": "empleado_test",
+            "role": "empleado",
+            "intencion": "",
+            "respuesta": "",
+            "fuentes": [],
+            "confidence": 0.0,
+            "requires_human_review": False,
+            "retries": 0,
+        },
+        config=config,
+    )
 
     interrupt_info = result.get("__interrupt__")
     if interrupt_info:
-        print(f"\n  ⚠️  Se pausó inesperadamente (no debería para RAG)")
+        print("\n  ⚠️  Se pauso inesperadamente (no deberia para tickets)")
     else:
-        print(f"\n  ✅ No se pausó — respuesta directa")
+        print("\n  ✅ No se pauso — respuesta directa")
 
     print(f"  Respuesta final: {result.get('respuesta', 'N/A')[:150]}")
 

@@ -16,15 +16,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 
 from src.llm.providers import get_llm
-from src.tools.registry import get_all_tools
+from src.security.rbac import get_allowed_tools, validate_role
 
 # Prompt de sistema del agente
 SYSTEM_PROMPT = """Eres Aegis, un asistente de soporte interno de Aegis Corp.
 
-Puedes usar las herramientas disponibles para ayudar a los empleados:
+Puedes usar las herramientas disponibles para ayudar según tu rol:
 - Crear, listar y buscar tickets de soporte
-- Enviar emails internos
-- Consultar la base de datos de la empresa (solo SELECT)
+- Enviar emails internos (solo administradores)
+- Consultar la base de datos de la empresa (solo SELECT, solo administradores)
 
 Reglas:
 1. Usa las herramientas cuando sea necesario. No inventes datos.
@@ -34,14 +34,23 @@ Reglas:
 """
 
 
-def create_agent():
-    """Crea y devuelve el agente ReAct configurado con todas las herramientas.
+def create_agent(role: str = "empleado"):
+    """Crea y devuelve el agente ReAct configurado con tools filtradas por rol.
+
+    Args:
+        role: Rol del usuario ("empleado" o "admin").
 
     Returns:
         Agente ReAct de LangGraph listo para usar con .invoke().
+
+    Raises:
+        ValueError: Si el rol no es válido.
     """
+    if not validate_role(role):
+        raise ValueError(f"Rol desconocido: {role}")
+
     llm = get_llm(temperature=0)
-    tools = get_all_tools()
+    tools = get_allowed_tools(role)
 
     # create_react_agent crea un grafo LangGraph que implementa el ciclo:
     #   LLM decide -> ejecuta tool -> LLM observa -> repite o responde
@@ -54,16 +63,17 @@ def create_agent():
     return agent
 
 
-def run_agent(user_input: str) -> dict:
+def run_agent(user_input: str, role: str = "empleado") -> dict:
     """Ejecuta el agente con un mensaje del usuario.
 
     Args:
         user_input: Pregunta o instrucción del usuario.
+        role: Rol del usuario ("empleado" o "admin").
 
     Returns:
         Diccionario con: response (respuesta final), messages (historial completo).
     """
-    agent = create_agent()
+    agent = create_agent(role)
 
     result = agent.invoke({
         "messages": [HumanMessage(content=user_input)],

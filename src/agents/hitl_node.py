@@ -1,80 +1,112 @@
-"""Nodo HITL (Human-in-the-Loop): pausa el grafo para aprobación humana.
+"""Nodo HITL (Human-in-the-Loop): pausa el grafo para aprobacion humana.
 
-Se activa cuando:
-  - La intención es "accion" (crear tickets, enviar emails — acciones sensibles)
-  - El crítico marca requires_human_review=True (confidence muy baja)
-
-Usa interrupt() de LangGraph para pausar la ejecución.
-El humano responde con Command(resume="approve") o Command(resume="reject").
+Fase 2 (SEC-02): separa la ejecucion de la aprobacion. El nodo recibe un
+action_plan estructurado, muestra un resumen al revisor, y usa interrupt()
+para pausar. Solo despues de Command(resume="approve") el grafo continua
+al action_executor_node. Las acciones rechazadas o con decision invalida
+se marcan como rechazadas y no se ejecutan.
 """
+
+from datetime import datetime
 
 from langgraph.types import interrupt
 
 from src.agents.state import AgentState
 
 
+def _redact_sensitive_args(tool_name: str, arguments: dict) -> dict:
+    """Limita los argumentos mostrados al revisor para no exponer datos sensibles."""
+    if tool_name == "enviar_email":
+        return {k: v for k, v in arguments.items() if k not in ("cuerpo", "asunto") or k == "para"}
+    return {k: v for k, v in arguments.items() if k not in ("password", "token", "api_key")}
+
+
 def hitl_node(state: AgentState) -> dict:
-    """Nodo del grafo: pausa para aprobación humana.
+    """Nodo del grafo: pausa para aprobacion humana basado en action_plan.
 
-    Muestra la acción propuesta y espera la decisión del humano.
-    LangGraph guarda el estado y pausa. Cuando el humano responde
-    con Command(resume=...), el grafo continúa desde aquí.
-
-    Solo pausa para acciones sensibles (email). Tickets pasan directo
-    sin aprobación.
-
-    Returns:
-        Diccionario con la decisión del humano:
-        - approved: True/False
-        - Si se rechaza, devuelve respuesta de rechazo al usuario.
+    Muestra un resumen estructurado, espera 'approve' o 'reject',
+    y registra quien aprobo y cuando. Previene ejecucion repetida.
     """
-    query = state["query"]
-    respuesta = state.get("respuesta", "")
-    intencion = state.get("intencion", "")
+    action_plan = state.get("action_plan")
 
-    # Solo pausar para acciones sensibles (envío de email/correo)
-    # Tickets (crear/listar/buscar) no necesitan aprobación humana
-    # Buscar verbos de acción de email, no la palabra "email" suelta
-    # (puede aparecer en títulos de tickets: "Email no llega")
-    respuesta_lower = respuesta.lower()
-    email_action_patterns = [
-        "email enviado", "correo enviado", "enviado a", "he enviado",
-        "enviado correctamente", "enviado exitosamente",
-        "email ha sido enviado", "correo ha sido enviado",
-    ]
-    if not any(p in respuesta_lower for p in email_action_patterns):
+    if not action_plan:
         return {
-            "respuesta": respuesta,
+            "respuesta": "No se requiere revision humana.",
             "requires_human_review": False,
         }
 
-    # Construir el resumen de lo que el agente quiere hacer
-    resumen = f"""
-=== REVISIÓN HUMANA REQUERIDA ===
+    # Si ya fue aprobada o rechazada, no volver a pausar
+    current_status = action_plan.get("approval_status")
+    if current_status in ("approved", "rejected"):
+        return {
+            "requires_human_review": False,
+        }
 
-Intención: {intencion}
-Pregunta del usuario: {query}
+    # Si ya fue ejecutada, no aprobar de nuevo
+    if action_plan.get("execution_status") == "succeeded" or action_plan.get("executed_at"):
+        return {
+            "respuesta": "⚠️ Esta acción ya fue ejecutada. No se puede aprobar de nuevo.",
+            "action_plan": {**action_plan, "approval_status": "rejected"},
+            "requires_human_review": False,
+        }
 
-Respuesta propuesta del agente:
-{respuesta}
+    tool_name = action_plan.get("tool_name", "desconocida")
+    risk_level = action_plan.get("risk_level", "unknown")
+    arguments = action_plan.get("arguments", {})
+    requested_by = action_plan.get("requested_by", "unknown")
+    role = action_plan.get("role", "unknown")
 
-¿Aprobar esta respuesta? (approve / reject)
+    safe_args = _redact_sensitive_args(tool_name, arguments)
+
+    resumen = f"""=== REVISION HUMANA REQUERIDA ===
+
+Accion: {tool_name}
+Nivel de riesgo: {risk_level.upper()}
+Solicitado por: {requested_by} (rol: {role})
+Argumentos (resumidos): {safe_args}
+
+Responde 'approve' para ejecutar o 'reject' para denegar.
 """
 
-    # interrupt() pausa la ejecución aquí.
-    # El valor que se pasa es lo que ve el humano (para decidir).
-    # El valor que devuelve es lo que el humano envía con Command(resume=...).
+    # Pausar ejecucion hasta que un humano responda
     decision = interrupt(resumen)
 
+    # Validar decision estrictamente
+    if decision not in ("approve", "reject"):
+        return {
+            "respuesta": "⛔ Decisión inválida. Debe ser 'approve' o 'reject'. Acción rechazada por seguridad.",
+            "action_plan": {**action_plan, "approval_status": "rejected"},
+            "requires_human_review": False,
+        }
+
+    approved_by = state.get("user_id", "unknown")
+    approved_at = datetime.now().isoformat()
+
     if decision == "approve":
-        # El humano aprobó — devolver la respuesta tal cual
+        updated_plan = {
+            **action_plan,
+            "approval_status": "approved",
+            "approved_by": approved_by,
+            "approved_at": approved_at,
+        }
         return {
-            "respuesta": respuesta,
+            "action_plan": updated_plan,
+            "approved_by": approved_by,
+            "approved_at": approved_at,
             "requires_human_review": False,
         }
-    else:
-        # El humano rechazó — devolver mensaje de rechazo
-        return {
-            "respuesta": "⛔ Tu solicitud fue revisada por un supervisor y rechazada. Para más información, contacta al equipo de soporte.",
-            "requires_human_review": False,
-        }
+
+    # decision == "reject"
+    updated_plan = {
+        **action_plan,
+        "approval_status": "rejected",
+        "approved_by": approved_by,
+        "approved_at": approved_at,
+    }
+    return {
+        "respuesta": "⛔ Acción rechazada por supervisor. Para más información, contacta al equipo de soporte.",
+        "action_plan": updated_plan,
+        "approved_by": approved_by,
+        "approved_at": approved_at,
+        "requires_human_review": False,
+    }

@@ -37,6 +37,11 @@ def trace_execution(
     elapsed_seconds: float,
     user_id: str = "unknown",
     role: str = "empleado",
+    tool_name: str | None = None,
+    authorization_decision: str | None = None,
+    action_plan: dict | None = None,
+    approved_by: str | None = None,
+    approved_at: str | None = None,
 ) -> dict:
     """Registra una ejecución del grafo en el archivo de traces.
 
@@ -50,6 +55,11 @@ def trace_execution(
         elapsed_seconds: Tiempo total de ejecución.
         user_id: ID del usuario.
         role: Rol del usuario.
+        tool_name: Nombre de la tool invocada (si aplica).
+        authorization_decision: Decisión de autorización ("allowed", "denied", etc.).
+        action_plan: Plan de acción estructurado (Fase 2 HITL).
+        approved_by: Usuario que aprobó una acción HITL.
+        approved_at: Timestamp de aprobación HITL.
 
     Returns:
         Diccionario con el trace registrado.
@@ -66,6 +76,11 @@ def trace_execution(
         "fuentes": [f.get("source", "desconocido") for f in fuentes],
         "retries": retries,
         "elapsed_seconds": round(elapsed_seconds, 3),
+        "tool_name": tool_name,
+        "authorization_decision": authorization_decision,
+        "action_plan": action_plan,
+        "approved_by": approved_by,
+        "approved_at": approved_at,
     }
 
     # Append al archivo JSONL (una línea por trace)

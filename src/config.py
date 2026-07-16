@@ -52,10 +52,30 @@ class Settings(BaseSettings):
         description="Máximo de tokens a generar por respuesta",
     )
 
-    # JWT secret para auth (opcional, default para demo)
+    # Entorno de ejecucion
+    environment: str = Field(
+        default="development",
+        description="Entorno: development, staging, production",
+    )
+
+    # JWT secret para auth
     jwt_secret: str = Field(
         default="aegis-desk-demo-secret-change-in-production",
         description="Secret para firmar JWT tokens",
+    )
+    jwt_issuer: str = Field(
+        default="aegis-desk",
+        description="Issuer claim del JWT",
+    )
+    jwt_audience: str = Field(
+        default="aegis-desk-api",
+        description="Audience claim del JWT",
+    )
+
+    # CORS: origenes permitidos (lista separada por comas)
+    cors_origins: str = Field(
+        default="*",
+        description="Origenes CORS permitidos, separados por comas",
     )
 
     # LangSmith (opcional — si no está seteado, tracing local)

@@ -17,12 +17,19 @@ class AgentState(TypedDict):
     Fields:
         messages: Historial de mensajes (LangGraph acumula automáticamente con add_messages).
         query: Pregunta original del usuario.
+        user_id: Identificador del usuario autenticado.
+        role: Rol del usuario ("empleado" o "admin").
         intencion: Categoria clasificada por el supervisor: "rag", "datos", "accion", "chat".
         respuesta: Respuesta generada por el worker (RAG agent, Data agent, etc).
         fuentes: Lista de fuentes usadas (chunks de RAG, tablas consultadas, etc).
         confidence: Nivel de confianza del crítico (0.0 a 1.0).
         requires_human_review: True si el crítico decide que necesita aprobación humana.
         retries: Contador de reintentos (el crítico puede pedir reintento, max 2).
+        tool_name: Nombre de la herramienta invocada (si aplica).
+        authorization_decision: Decision de autorizacion ("allowed", "denied", "unknown_role").
+        action_plan: Plan estructurado de accion pendiente (Fase 2 HITL).
+        approved_by: Usuario que aprobo una accion HITL.
+        approved_at: Timestamp ISO de aprobacion HITL.
     """
     # add_messages hace que LangGraph acumule mensajes en vez de sobreescribirlos
     # Annotated[list, add_messages] = "lista que se appenda, no se reemplaza"
@@ -36,3 +43,8 @@ class AgentState(TypedDict):
     confidence: float
     requires_human_review: bool
     retries: int
+    tool_name: str | None
+    authorization_decision: str | None
+    action_plan: dict | None
+    approved_by: str | None
+    approved_at: str | None
