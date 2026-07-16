@@ -1,8 +1,9 @@
-"""Herramienta de consulta SQL sobre SQLite (solo SELECT, allowlist de tablas).
+"""Herramienta de consulta SQL de solo lectura (SELECT) sobre SQLite local o Postgres/Supabase.
 
 Seguridad:
   - Conexion SQLite en modo solo lectura (file URI mode=ro).
-  - set_authorizer denega cualquier operacion distinta de SELECT/READ.
+  - Postgres: session read-only + validación textual idéntica.
+  - set_authorizer (SQLite) denega cualquier operacion distinta de SELECT/READ.
   - Solo permite lectura de tablas en ALLOWED_TABLES.
   - Bloquea sqlite_master, sqlite_sequence, pragmas y funciones peligrosas.
   - Valida que la query sea SELECT y rechaza comentarios/stacked queries.
@@ -14,6 +15,8 @@ import sqlite3
 from pathlib import Path
 
 from langchain_core.tools import tool
+
+from src.config import get_settings
 
 # Base de datos SQLite simulada de Aegis Corp
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "aegis.db"
@@ -247,6 +250,49 @@ def _format_rows(rows: list, columns: list[str], mask_sensitive: bool = True) ->
     return f"Resultados ({len(rows)} filas):\n" + "\n".join(lines)
 
 
+def _execute_postgres(query: str) -> str:
+    """Ejecuta un SELECT validado contra Postgres/Supabase en modo solo lectura."""
+    try:
+        import psycopg2
+    except ImportError as exc:
+        return "Error: paquete psycopg2 no instalado. Ejecuta: pip install psycopg2-binary"
+
+    settings = get_settings()
+    conn = psycopg2.connect(
+        settings.database_url,
+        options="-c default_transaction_read_only=on",
+        connect_timeout=QUERY_TIMEOUT,
+    )
+    try:
+        with conn.cursor() as cursor:
+            # Validación textual idéntica a SQLite
+            error = _validate_select(query)
+            if error:
+                return error
+
+            limited_query = query.strip().rstrip(";")
+            if not _has_limit_clause(limited_query):
+                limited_query = f"{limited_query} LIMIT {MAX_ROWS + 1}"
+
+            cursor.execute(limited_query)
+            rows = cursor.fetchmany(MAX_ROWS + 1)
+            columns = [desc[0] for desc in cursor.description or []]
+
+            if not rows:
+                return "La consulta no devolvio resultados."
+
+            truncated = len(rows) > MAX_ROWS
+            rows = rows[:MAX_ROWS]
+            result = _format_rows(rows, columns, mask_sensitive=True)
+            if truncated:
+                result += f"\n... (limite de {MAX_ROWS} filas alcanzado)"
+            return result
+    except psycopg2.Error as e:
+        return f"Error de SQL: {e}"
+    finally:
+        conn.close()
+
+
 @tool
 def consultar_sql(query: str) -> str:
     """Ejecuta una consulta SQL de solo lectura (SELECT) sobre la base de datos de Aegis Corp.
@@ -262,7 +308,13 @@ def consultar_sql(query: str) -> str:
     Returns:
         Resultados de la consulta formateados, o mensaje de error si la query es invalida.
     """
-    # Asegurar que la DB existe (solo la primera vez)
+    settings = get_settings()
+
+    # Si hay DATABASE_URL, usar Postgres/Supabase en modo solo lectura
+    if settings.database_url:
+        return _execute_postgres(query)
+
+    # Asegurar que la DB local existe (solo la primera vez)
     _init_db()
 
     # 1. Validacion textual rapida

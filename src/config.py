@@ -92,6 +92,40 @@ class Settings(BaseSettings):
         description="Habilitar tracing de LangSmith",
     )
 
+    # Supabase (opcional — para persistencia en Postgres en producción)
+    supabase_url: str = Field(
+        default="",
+        description="URL del proyecto Supabase (https://<ref>.supabase.co)",
+    )
+    supabase_key: str = Field(
+        default="",
+        description="API key anónima de Supabase (role anon)",
+    )
+    supabase_service_key: str = Field(
+        default="",
+        description="Service Role Key de Supabase (para operaciones admin/migraciones)",
+    )
+
+    # Pinecone (opcional — para vector store en producción)
+    pinecone_api_key: str = Field(
+        default="",
+        description="API key de Pinecone",
+    )
+    pinecone_index: str = Field(
+        default="aegis-desk",
+        description="Nombre del índice de Pinecone",
+    )
+    pinecone_namespace: str = Field(
+        default="aegis-docs",
+        description="Namespace dentro del índice de Pinecone",
+    )
+
+    # Postgres / Supabase (opcional — backend SQL remoto en producción)
+    database_url: str = Field(
+        default="",
+        description="URL de conexión Postgres (ej. Supabase direct connection)",
+    )
+
     # Configuración de pydantic-settings
     model_config = SettingsConfigDict(
         env_file=".env",

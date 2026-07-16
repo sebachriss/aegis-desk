@@ -12,8 +12,9 @@ from pathlib import Path
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
 
+from src.db.pinecone_store import is_pinecone_configured, upsert_documents as upsert_pinecone
+from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
 from src.security.prompt_injection import sanitize_input
 
 # Ruta donde se guardan los documentos fuente
@@ -21,33 +22,6 @@ DOCUMENTS_DIR = Path(__file__).parent / "documents"
 
 # Ruta donde Chroma guarda la base de datos (persistente en disco)
 CHROMA_DIR = Path(__file__).parent.parent.parent / "data" / "chroma"
-
-# Modelo de embeddings: all-MiniLM-L6-v2
-# - 90MB, rapido, bueno para texto general
-# - Genera vectores de 384 dimensiones
-# - Se descarga automaticamente la primera vez
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-
-class LocalEmbeddings:
-    """Wrapper para usar sentence-transformers como modelo de embeddings de LangChain.
-
-    LangChain espera objetos con metodos embed_documents y embed_query.
-    sentence-transformers no tiene esa interfaz nativa, asi que la adaptamos.
-    """
-
-    def __init__(self, model_name: str = EMBEDDING_MODEL):
-        self.model = SentenceTransformer(model_name)
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Genera embeddings para una lista de textos (los chunks al indexar)."""
-        embeddings = self.model.encode(texts, convert_to_numpy=True)
-        return embeddings.tolist()
-
-    def embed_query(self, text: str) -> list[float]:
-        """Genera embedding para un texto (el query del usuario al buscar)."""
-        embedding = self.model.encode([text], convert_to_numpy=True)
-        return embedding[0].tolist()
 
 
 def load_documents() -> list[Document]:
@@ -128,6 +102,8 @@ def split_documents(documents: list[Document]) -> list[Document]:
 def create_vectorstore(chunks: list[Document]) -> Chroma:
     """Crea (o sobreescribe) la base de datos Chroma con los chunks.
 
+    Si Pinecone está configurado, también sube los chunks al índice remoto.
+
     Chroma guarda:
       - El texto de cada chunk
       - Su vector (embedding)
@@ -146,6 +122,19 @@ def create_vectorstore(chunks: list[Document]) -> Chroma:
         persist_directory=str(CHROMA_DIR),
         collection_name="aegis_docs",
     )
+
+    if is_pinecone_configured():
+        print("  Subiendo chunks a Pinecone...")
+        pinecone_docs = [
+            {
+                "id": f"{chunk.metadata.get('source', 'doc')}_{i}",
+                "content": chunk.page_content,
+                "source": chunk.metadata.get("source", "desconocido"),
+            }
+            for i, chunk in enumerate(chunks)
+        ]
+        upsert_pinecone(pinecone_docs)
+        print("  Pinecone actualizado.")
 
     print(f"  Base de datos creada en: {CHROMA_DIR}")
     print(f"  Total chunks indexados: {len(chunks)}")

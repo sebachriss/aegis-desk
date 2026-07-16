@@ -1,25 +1,22 @@
-"""Retriever: busca chunks relevantes en la base de datos Chroma.
+"""Retriever: busca chunks relevantes en la base de datos vectorial.
 
-Carga la base persistente del disco y permite hacer busquedas
-por similitud semantica (no por palabras exactas).
+Por defecto usa Chroma local. Si PINECONE_API_KEY está configurado,
+usa Pinecone como backend vectorial.
 """
-
-from pathlib import Path
 
 from langchain_chroma import Chroma
 
-from src.rag.ingest import CHROMA_DIR, EMBEDDING_MODEL, LocalEmbeddings
+from src.config import get_settings
+from src.db.pinecone_store import is_pinecone_configured, search as pinecone_search
+from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
+from src.rag.ingest import CHROMA_DIR
 
 # Singleton del vectorstore (se carga una sola vez)
 _vectorstore: Chroma | None = None
 
 
-def get_vectorstore() -> Chroma:
-    """Carga la base Chroma del disco (persistente).
-
-    Si ya se cargo antes, devuelve la misma instancia (singleton).
-    Si no existe la base, lanza error indicando que hay que correr ingest primero.
-    """
+def _get_chroma_vectorstore() -> Chroma:
+    """Carga la base Chroma del disco (persistente)."""
     global _vectorstore
 
     if _vectorstore is not None:
@@ -43,19 +40,11 @@ def get_vectorstore() -> Chroma:
 
 
 def search(query: str, k: int = 3) -> list[dict]:
-    """Busca los k chunks mas relevantes para una pregunta.
+    """Busca los k chunks mas relevantes para una pregunta."""
+    if is_pinecone_configured():
+        return pinecone_search(query, k=k)
 
-    Args:
-        query: La pregunta del usuario.
-        k: Cuantos chunks devolver (default 3).
-
-    Returns:
-        Lista de diccionarios con: content (texto), source (archivo), score (similitud).
-    """
-    vectorstore = get_vectorstore()
-
-    # similarity_search_with_score devuelve tuplas (Document, score)
-    # score es distancia (menor = mas similar en Chroma)
+    vectorstore = _get_chroma_vectorstore()
     results = vectorstore.similarity_search_with_score(query, k=k)
 
     chunks = []
