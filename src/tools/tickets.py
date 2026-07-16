@@ -22,13 +22,14 @@ def _get_connection() -> sqlite3.Connection:
 
 
 @tool
-def crear_ticket(titulo: str, descripcion: str, prioridad: str) -> str:
+def crear_ticket(titulo: str, descripcion: str, prioridad: str, created_by: str = "") -> str:
     """Crea un nuevo ticket de soporte en el sistema.
 
     Args:
         titulo: Resumen corto del problema (max 100 caracteres).
         descripcion: Detalle del problema reportado.
         prioridad: Nivel de urgencia: "baja", "media" o "alta".
+        created_by: Usuario que crea el ticket (inyectado por el executor).
 
     Returns:
         Confirmacion con el ID del ticket creado.
@@ -39,33 +40,46 @@ def crear_ticket(titulo: str, descripcion: str, prioridad: str) -> str:
     if len(titulo) > 100:
         titulo = titulo[:100]
 
+    from datetime import datetime
+
     conn = _get_connection()
     try:
         cursor = conn.execute(
-            "INSERT INTO tickets (titulo, descripcion, prioridad, estado) VALUES (?, ?, ?, ?)",
-            (titulo, descripcion, prioridad, "abierto"),
+            "INSERT INTO tickets (titulo, descripcion, prioridad, estado, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (titulo, descripcion, prioridad, "abierto", created_by, datetime.now().isoformat()),
         )
         conn.commit()
         ticket_id = cursor.lastrowid
     finally:
         conn.close()
 
-    return f"Ticket #{ticket_id} creado con prioridad '{prioridad}'. Titulo: {titulo}. Estado: abierto."
+    return f"Ticket #{ticket_id} creado con prioridad '{prioridad}'. Titulo: {titulo}. Estado: abierto. Creado por: {created_by or 'sistema'}."
 
 
 @tool
-def listar_tickets(estado: str = "todos") -> str:
+def listar_tickets(estado: str = "todos", created_by: str = "") -> str:
     """Lista los tickets de soporte existentes.
 
     Args:
         estado: Filtrar por estado: "abierto", "cerrado", o "todos" (default).
+        created_by: Si se proporciona, filtra tickets creados por ese usuario.
 
     Returns:
         Lista de tickets formateada, o mensaje si no hay resultados.
     """
     conn = _get_connection()
     try:
-        if estado == "todos":
+        if created_by and estado != "todos":
+            cursor = conn.execute(
+                "SELECT id, titulo, prioridad, estado FROM tickets WHERE estado = ? AND created_by = ? ORDER BY id DESC",
+                (estado, created_by),
+            )
+        elif created_by:
+            cursor = conn.execute(
+                "SELECT id, titulo, prioridad, estado FROM tickets WHERE created_by = ? ORDER BY id DESC",
+                (created_by,),
+            )
+        elif estado == "todos":
             cursor = conn.execute("SELECT id, titulo, prioridad, estado FROM tickets ORDER BY id DESC")
         else:
             if estado not in ("abierto", "cerrado"):

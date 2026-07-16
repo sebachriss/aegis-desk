@@ -25,7 +25,24 @@ DNI_PATTERN = re.compile(
 
 # Campos sensibles en texto (ej: "salario: 75000")
 SENSITIVE_DATA_PATTERN = re.compile(
-    r"(salario|salary|sueldo|password|contraseña|token|api[_-]?key)\s*[:=]\s*\S+",
+    r"(salario|salary|sueldo|password|contraseña|token|api[_-]?key|secret|iban|cvv)\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
+
+# IBAN español/pan-europeo: dos letras seguidas de 2-34 caracteres alfanumericos
+IBAN_PATTERN = re.compile(
+    r"\b[A-Z]{2}[0-9]{2}(?:[ ]?[A-Z0-9]{4}){1,7}[ ]?\b",
+    re.IGNORECASE,
+)
+
+# Tarjetas de credito/débito (Visa, Mastercard, Amex, Discover)
+CARD_PATTERN = re.compile(
+    r"\b(?:\d[ -]*?){13,19}\b",
+)
+
+# Direcciones fisicas simples (calle/av/plaza + numero, CP opcional)
+ADDRESS_PATTERN = re.compile(
+    r"\b(Calle|Avda?\.?|Avenida|Plaza|Paseo|C/|Ctra\.?|Ronda|Cami)\s+[^,\n]{5,60}\b",
     re.IGNORECASE,
 )
 
@@ -58,6 +75,27 @@ def mask_sensitive_data(match) -> str:
     if len(parts) == 2:
         return f"{parts[0]}: ***"
     return "***"
+
+
+def mask_iban(match) -> str:
+    """Enmascara un IBAN dejando visibles pais y ultimos 4."""
+    iban = match.group().replace(" ", "")
+    if len(iban) > 8:
+        return f"{iban[:2]} **** **** {iban[-4:]}"
+    return "** **** **"
+
+
+def mask_card(match) -> str:
+    """Enmascara un numero de tarjeta: 1234 5678 9012 3456 → **** **** **** 3456."""
+    card = match.group().replace(" ", "").replace("-", "")
+    if len(card) >= 4:
+        return "**** **** **** " + card[-4:]
+    return "****"
+
+
+def mask_address(match) -> str:
+    """Enmascara direcciones fisicas."""
+    return "[DIRECCION OCULTA]"
 
 
 def filter_pii(text: str) -> tuple[str, list[dict]]:
@@ -108,5 +146,32 @@ def filter_pii(text: str) -> tuple[str, list[dict]]:
         return masked
 
     text = SENSITIVE_DATA_PATTERN.sub(sensitive_replacer, text)
+
+    # IBANs
+    def iban_replacer(match):
+        original = match.group()
+        masked = mask_iban(match)
+        detections.append({"type": "iban", "original": original, "masked": masked})
+        return masked
+
+    text = IBAN_PATTERN.sub(iban_replacer, text)
+
+    # Tarjetas de credito/debito
+    def card_replacer(match):
+        original = match.group()
+        masked = mask_card(match)
+        detections.append({"type": "card", "original": original, "masked": masked})
+        return masked
+
+    text = CARD_PATTERN.sub(card_replacer, text)
+
+    # Direcciones fisicas
+    def address_replacer(match):
+        original = match.group()
+        masked = mask_address(match)
+        detections.append({"type": "address", "original": original, "masked": masked})
+        return masked
+
+    text = ADDRESS_PATTERN.sub(address_replacer, text)
 
     return text, detections
