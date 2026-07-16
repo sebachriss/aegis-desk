@@ -43,11 +43,22 @@ USERS = {
 def authenticate(username: str, password: str) -> dict | None:
     """Verifica credenciales y devuelve el usuario si son correctas.
 
+    Si Supabase Auth esta configurado y el username parece un email,
+    intenta autenticar contra Supabase primero. De lo contrario, usa
+    el auth local con bcrypt.
+
     No revela si el usuario existe o la contraseña es incorrecta.
 
     Returns:
         Dict con username, role, display_name si autentica, None si no.
     """
+    # Intentar Supabase Auth para emails cuando esta configurado
+    if "@" in username:
+        from src.auth.supabase_auth import authenticate_with_supabase
+        supabase_user = authenticate_with_supabase(username, password)
+        if supabase_user:
+            return supabase_user
+
     user = USERS.get(username)
     if user is None:
         return None
