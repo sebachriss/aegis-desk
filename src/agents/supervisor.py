@@ -28,6 +28,36 @@ CHAT_PATTERNS = [
 ]
 _compiled_chat = [re.compile(p, re.IGNORECASE) for p in CHAT_PATTERNS]
 
+# Patrones rápidos de datos: preguntas sobre la base de datos de empleados/tickets/departamentos.
+# Tienen prioridad sobre RAG para evitar que consultas de SQL se routeen a documentos.
+DATA_PATTERNS = [
+    r"\b(cuántos|cuantas)\s+(empleados|departamentos|tickets|registros)\b",
+    r"\b(quién es el empleado|quien es el empleado)\b",
+    r"\b(empleado con (mayor|más)|mayor salario|más salario)\b",
+    r"\b(presupuesto total|tickets (cerrados|abiertos)|registros de tickets)\b",
+    r"\b(gana más|quien gana|mayor salario)\b",
+]
+_compiled_data = [re.compile(p, re.IGNORECASE) for p in DATA_PATTERNS]
+
+# Patrones rápidos de RAG: preguntas sobre políticas, procedimientos, FAQ o equipos.
+# Estas palabras clave indican que el usuario busca información documentada.
+RAG_PATTERNS = [
+    r"\b(política|politica|manual|procedimiento|faq|pregunta frecuente)\b",
+    r"\b(pet fridays?|mascota)\b",
+    r"\b(equipo nuevo|equipos nuevos|solicitar.*equipo|pedir.*equipo|laptop)\b",
+    r"\b(contraseña|password|resetear|reset)\b",
+    r"\b(vacaciones|días de vacaciones|teletrabajo|remoto)\b",
+    r"\b(salario|sueldo|nómina)\b",
+    r"\b(pérdida de equipo|perdí|perdi.*(laptop|equipo)|rob(o|aron)|extrav(i|io))\b",
+    r"\b(cómo solicito|cómo pido|cómo accedo|cómo reporto|qué hago si)\b",
+]
+_compiled_rag = [re.compile(p, re.IGNORECASE) for p in RAG_PATTERNS]
+
+# Palabras que indican una orden de acción explícita (crear, enviar, listar, buscar).
+# Si aparecen junto a tickets/email, la intención es "accion".
+ACTION_VERBS = re.compile(r"\b(crea|crear|envía|enviar|envie|lista|listar|listame|muestra|mostrar|busca|buscar|buscame|manda|mandar)\b", re.IGNORECASE)
+TICKET_EMAIL_NOUNS = re.compile(r"\b(ticket|tickets|email|correo|mail)\b", re.IGNORECASE)
+
 
 def _is_trivial_chat(query: str) -> bool:
     """Detecta si el mensaje es un saludo/despedida trivial sin usar LLM."""
@@ -35,6 +65,21 @@ def _is_trivial_chat(query: str) -> bool:
     if len(stripped) > 60:
         return False
     return any(p.match(stripped) for p in _compiled_chat)
+
+
+def _is_action_query(query: str) -> bool:
+    """Heurística rápida: detecta órdenes de acción sobre tickets/email."""
+    return ACTION_VERBS.search(query) and TICKET_EMAIL_NOUNS.search(query)
+
+
+def _is_data_query(query: str) -> bool:
+    """Heurística rápida: detecta consultas de base de datos."""
+    return any(p.search(query) for p in _compiled_data)
+
+
+def _is_rag_query(query: str) -> bool:
+    """Heurística rápida: detecta consultas que buscan info documentada."""
+    return any(p.search(query) for p in _compiled_rag)
 
 
 # Schema de salida — el LLM tiene que rellenar esto
@@ -59,21 +104,24 @@ SYSTEM_PROMPT = """Eres el supervisor de Aegis Desk, un sistema de soporte inter
 
 Tu trabajo es clasificar la intención del mensaje del usuario en una de 4 categorías:
 
-- **rag**: El usuario pregunta sobre políticas, manuales, procedimientos, o FAQ de la empresa.
-  Ej: "¿Cuántos días de vacaciones tengo?", "¿Cómo reseteo mi contraseña?"
+- **rag**: El usuario pregunta sobre políticas, manuales, procedimientos, FAQ de la empresa, o cómo hacer algo dentro de la empresa (equipos, contraseñas, teletrabajo, vacaciones, pérdida de equipo).
+  Ej: "¿Cuántos días de vacaciones tengo?", "¿Cómo reseteo mi contraseña?", "¿Puedo traer a mi mascota?", "¿Cómo solicito un equipo nuevo?", "¿Qué hago si pierdo mi laptop?"
 
 - **datos**: El usuario pregunta sobre datos que están en la base de datos SQL (empleados, departamentos, números, estadísticas, presupuestos).
   Ej: "¿Cuántos empleados hay?", "¿Quién gana más en Ventas?", "¿Cuál es el presupuesto de IT?"
   NOTA: listar tickets o buscar tickets NO es "datos" — es "accion".
 
-- **accion**: El usuario pide ejecutar una acción con herramientas: crear ticket, listar tickets, buscar ticket, enviar email.
+- **accion**: El usuario pide explícitamente ejecutar una acción con herramientas: crear ticket, listar tickets, buscar ticket, enviar email.
   Ej: "Crea un ticket de alta prioridad", "Envía un email a RRHH", "Lista los tickets abiertos", "Busca el ticket 1"
+  Una frase como "Pérdida de laptop" o "Mi laptop no funciona" es una consulta de información (rag) a menos que diga explícitamente "crea un ticket" o "reporta".
 
 - **chat**: Saludos, conversación general, o preguntas que no encajan en las anteriores.
   Ej: "Hola", "¿Qué tal?", "Gracias"
 
-Regla clave: si la pregunta menciona "tickets" o "email", es casi siempre "accion".
-Solo es "datos" si pregunta por empleados, departamentos, o números de la DB.
+Reglas clave:
+1. Si la pregunta busca información documentada (políticas, manuales, FAQ, procedimientos), es **rag**.
+2. Si la pregunta menciona "tickets", "email" o pide explícitamente "crea"/"envía"/"lista"/"busca", es **accion**.
+3. Solo es **datos** si pregunta por empleados, departamentos, presupuestos o números de la DB.
 
 Responde solo con la clasificación en formato JSON. No respondas la pregunta del usuario.
 """
@@ -95,6 +143,41 @@ def supervisor_node(state: AgentState) -> dict:
         return {
             "intencion": "chat",
             "confidence": 1.0,
+        }
+
+    # Fast path: órdenes de acción sobre tickets/email
+    if _is_action_query(query):
+        return {
+            "intencion": "accion",
+            "confidence": 0.95,
+        }
+
+    # Fast path: consultas de datos obvias tienen prioridad
+    if _is_data_query(query):
+        return {
+            "intencion": "datos",
+            "confidence": 0.95,
+        }
+
+    # Fast path: órdenes de acción sobre tickets/email
+    if _is_action_query(query):
+        return {
+            "intencion": "accion",
+            "confidence": 0.95,
+        }
+
+    # Fast path: consultas de datos obvias tienen prioridad
+    if _is_data_query(query):
+        return {
+            "intencion": "datos",
+            "confidence": 0.95,
+        }
+
+    # Fast path: consultas de RAG obvias por palabras clave
+    if _is_rag_query(query) and not re.search(r"\b(crea|crear|envía|enviar|lista|listar|busca|buscar)\b", query, re.IGNORECASE):
+        return {
+            "intencion": "rag",
+            "confidence": 0.95,
         }
 
     # Slow path: LLM para clasificar
