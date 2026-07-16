@@ -85,3 +85,20 @@
   - README.md actualizado con arquitectura final, todas las fases, resultados, y guía completa
   - Proyecto 100% completado — 10 fases, 0 pendientes
 - **PROYECTO COMPLETADO** ✅
+
+## 2026-07-15 — Optimizaciones de latencia
+- **Fast path en supervisor**: regex para saludos triviales ("hola", "gracias", "adiós") sin LLM
+- **Skip crítico para chat**: chat con confidence >= 0.9 va directo a END
+- **HITL inteligente**: solo emails requieren aprobación humana, tickets pasan directo
+- **Fix HITL bug**: "listar mis tickets" pausaba porque "email" aparecía en título de ticket #3
+- **Modelo híbrido Groq + DeepInfra**:
+  - Supervisor: Groq Llama-3.1-8B-Instant (gratis, ~0.4s)
+  - Crítico: Groq Llama-3.3-70b-versatile (gratis, ~0.5s)
+  - Workers: DeepInfra DeepSeek-V4-Flash (calidad)
+  - Structured output: `function_calling` (json_schema no soportado en Groq, json_mode no garantiza schema)
+- **Resultados de latencia**:
+  - Datos: 11s → 3.4s (Groq 9.1x más rápido que DeepInfra en clasificación)
+  - RAG: 10s → 8.4s
+  - Tickets: 7s → 5.7s
+- **Frontend Next.js 16**: React 19 + shadcn/ui + Tailwind 4 + Recharts (Chat, HITL, Dashboard, Métricas)
+- **Pendiente**: evals con modelo híbrido, migración a Supabase/Pinecone/Render/Vercel
