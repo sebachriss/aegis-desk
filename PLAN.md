@@ -25,19 +25,19 @@ con supervisión humana**.
 |---|---|
 | Lenguaje | Python 3.11+ |
 | LLM Provider principal | DeepInfra — `deepseek-ai/DeepSeek-V4-Flash` ($0.09/$0.18 por M tokens, 1M ctx, function calling, JSON mode) |
-| LLM Provider secundario | Groq (tier gratis, velocidad extrema) — Llama 3.3 70B |
+| LLM Provider secundario | Groq (tier gratis, velocidad extrema) — Llama-3.1-8B-Instant (supervisor) + Llama-3.3-70b (crítico) |
 | Razonamiento profundo (puntual) | DeepSeek-R1 / V4 full en DeepInfra |
 | Framework LLM | LangChain (core, abstracciones) |
 | Orquestación de agentes | LangGraph (grafos, estado, interrupts) |
-| Embeddings | BGE en DeepInfra o `sentence-transformers` local (gratis) |
-| Vector Store | Chroma (local, simple) → migrable a pgvector/Qdrant |
+| Embeddings | `sentence-transformers` local (gratis) |
+| Vector Store | Chroma (local) → migrable a Pinecone (cloud) |
 | Backend | FastAPI (streaming SSE, async) |
-| Frontend | Streamlit (rápido al inicio) → React opcional en fase final |
-| Base de datos | SQLite → PostgreSQL (fase avanzada) |
-| Observabilidad | Langfuse (self-hosted, gratis) o LangSmith (tier gratis) |
+| Frontend | Next.js 16 + React 19 + shadcn/ui + Tailwind 4 + Recharts |
+| Base de datos | SQLite → Supabase PostgreSQL (migración cloud) |
+| Observabilidad | Métricas propias + tracing JSONL |
 | Evals | Dataset propio + LLM-as-judge + RAGAS |
-| Seguridad | Guardrails propios + LLM Guard / Rebuff (comparación) |
-| Infra | Docker, docker-compose, `.env`, pytest, CI (GitHub Actions) |
+| Seguridad | Guardrails propios (regex + LLM refusal) |
+| Infra | Docker, docker-compose, `.env`, Vercel (frontend), Render (API) |
 
 ### Presupuesto
 - $10 en DeepInfra ≈ 80M+ tokens con V4-Flash ≈ ~2,500 sesiones de agente. Sobra.
@@ -162,89 +162,88 @@ aegis-desk/
 > sin tests básicos y una entrada en `PROGRESS.md`.
 
 ### ✅ Fase 0 — Setup (½ día)
-- [ ] Crear estructura base del proyecto, venv, `requirements.txt`.
-- [ ] `.env` con `DEEPINFRA_API_KEY` y `GROQ_API_KEY` (+ `.env.example` sin secretos).
-- [ ] `config.py` con settings (pydantic-settings).
-- [ ] Primera llamada exitosa a DeepSeek-V4-Flash vía DeepInfra.
-- **Aprendizajes**: setup profesional, manejo de secretos, APIs OpenAI-compatible.
+- [x] Crear estructura base del proyecto, venv, `requirements.txt`.
+- [x] `.env` con `DEEPINFRA_API_KEY` y `GROQ_API_KEY` (+ `.env.example` sin secretos).
+- [x] `config.py` con settings (pydantic-settings).
+- [x] Primera llamada exitosa a DeepSeek-V4-Flash vía DeepInfra.
 
-### 🔲 Fase 1 — Fundamentos LLM (2-3 días)
-- [ ] Abstracción multi-proveedor (`providers.py`): DeepInfra + Groq con interfaz común y fallback automático.
-- [ ] Chat con streaming (async generators).
-- [ ] Structured outputs (Pydantic + JSON mode).
-- [ ] Memoria conversacional short-term (ventana + resumen).
-- [ ] Medidor de métricas por llamada: tokens, costo, latencia, tok/s (base de observabilidad).
-- [ ] CLI de chat funcional para probar todo.
-- **Aprendizajes**: streaming, tokens/costos, prompt engineering, context management.
+### ✅ Fase 1 — Fundamentos LLM (2-3 días)
+- [x] Abstracción multi-proveedor (`providers.py`): DeepInfra + Groq con interfaz común.
+- [x] Chat con streaming (async generators).
+- [x] Structured outputs (Pydantic + function_calling).
+- [x] Memoria conversacional short-term (ventana deslizante).
+- [x] Medidor de métricas por llamada: tokens, costo, latencia, tok/s.
+- [x] CLI de chat funcional para probar todo.
 
-### 🔲 Fase 2 — RAG (3-4 días)
-- [ ] Crear docs ficticios de la empresa (políticas RRHH, manual IT, FAQ).
-- [ ] Pipeline de ingesta: chunking (probar estrategias), embeddings, Chroma.
-- [ ] Retriever: similarity → luego búsqueda híbrida (BM25 + vectorial) y re-ranking.
-- [ ] Cadena RAG con citas de fuentes.
-- [ ] Comparar: embeddings locales vs BGE en DeepInfra.
-- **Aprendizajes**: chunking, embeddings, retrieval, grounding, hallucination mitigation.
+### ✅ Fase 2 — RAG (3-4 días)
+- [x] Crear docs ficticios de la empresa (políticas RRHH, manual IT, FAQ).
+- [x] Pipeline de ingesta: chunking por Markdown headers + embeddings locales + Chroma.
+- [x] Retriever: búsqueda por similitud semántica.
+- [x] Cadena RAG con citas de fuentes.
 
-### 🔲 Fase 3 — Tool Calling y Primer Agente (2-3 días)
-- [ ] Registro de herramientas (`registry.py`): tickets, email simulado, consulta SQL.
-- [ ] Agente ReAct con function calling nativo de V4-Flash.
-- [ ] Agente de Datos: text-to-SQL sobre SQLite con validación (solo SELECT, allowlist de tablas).
-- [ ] Manejo de errores de tools (retry, mensajes al LLM).
-- **Aprendizajes**: function calling, ReAct, agentes con herramientas, validación de salidas.
+### ✅ Fase 3 — Tool Calling y Primer Agente (2-3 días)
+- [x] Registro de herramientas (`registry.py`): tickets, email simulado, consulta SQL.
+- [x] Agente ReAct con function calling nativo de V4-Flash.
+- [x] Agente de Datos: text-to-SQL sobre SQLite con validación (solo SELECT, allowlist).
+- [x] Manejo de errores de tools (retry, mensajes al LLM).
 
-### 🔲 Fase 4 — Sistema Multi-Agente con LangGraph (4-5 días)
-- [ ] Definir estado compartido (`state.py`) con TypedDict/Pydantic.
-- [ ] Supervisor: clasificación de intención (modelo barato) y enrutamiento.
-- [ ] Integrar RAG Agent, Data Agent, Action Agent como nodos.
-- [ ] Agente Crítico (reflection): evalúa respuesta, puede pedir reintento (loop con límite).
-- [ ] Checkpointing de LangGraph (persistencia de estado, threads por conversación).
-- [ ] Visualizar el grafo (mermaid/ascii).
-- **Aprendizajes**: LangGraph, patrones supervisor/worker, reflection, state machines.
+### ✅ Fase 4 — Sistema Multi-Agente con LangGraph (4-5 días)
+- [x] Definir estado compartido (`state.py`) con TypedDict.
+- [x] Supervisor: clasificación de intención (Groq Llama-3.1-8B) y enrutamiento.
+- [x] Integrar RAG Agent, Data Agent, Action Agent como nodos.
+- [x] Agente Crítico (reflection): Groq Llama-3.3-70b evalúa respuesta, loop con límite.
+- [x] Checkpointing de LangGraph (MemorySaver, threads por conversación).
+- [x] Visualizar el grafo (mermaid).
 
-### 🔲 Fase 5 — Seguridad (3-4 días)
-- [ ] Input guard: heurísticas (patrones conocidos) + clasificador LLM de prompt injection.
-- [ ] Output guard: PII redaction (regex + NER), detección de jailbreak exitoso.
-- [ ] RBAC: permisos de herramientas por rol de usuario (empleado/admin).
-- [ ] Sandboxing SQL: allowlist estricta, límites de filas.
-- [ ] Rate limiting por usuario.
-- [ ] Comparar implementación propia vs LLM Guard.
-- **Aprendizajes**: OWASP LLM Top 10, prompt injection, defensa en profundidad.
+### ✅ Fase 5 — Seguridad (3-4 días)
+- [x] Input guard: heurísticas regex + sanitize de prompt injection.
+- [x] Output guard: PII redaction (emails, teléfonos, DNIs).
+- [x] RBAC: permisos de herramientas por rol (empleado/admin).
+- [x] Sandboxing SQL: allowlist estricta, solo SELECT.
+- [x] Rate limiting por usuario (10 req/120s).
 
-### 🔲 Fase 6 — Human-in-the-Loop (2-3 días)
-- [ ] `interrupt` de LangGraph antes de acciones sensibles (ej: crear ticket de alta prioridad, cualquier acción de escritura).
-- [ ] Cola de revisión: respuestas con baja confianza del crítico van a aprobación.
-- [ ] UI de aprobación (aprobar / rechazar / editar) en Streamlit.
-- [ ] Reanudación del grafo tras decisión humana (checkpointing).
-- **Aprendizajes**: interrupts, confianza/incertidumbre, diseño de flujos supervisados.
+### ✅ Fase 6 — Human-in-the-Loop (2-3 días)
+- [x] `interrupt` de LangGraph antes de acciones sensibles (solo emails).
+- [x] Cola de revisión: respuestas con baja confianza van a aprobación.
+- [x] UI de aprobación (aprobar / rechazar) en Streamlit y Next.js.
+- [x] Reanudación del grafo tras decisión humana (checkpointing).
 
-### 🔲 Fase 7 — Evals y Observabilidad (3-4 días)
-- [ ] Integrar Langfuse/LangSmith: trace completo de cada ejecución del grafo.
-- [ ] Dashboard de costos/latencia por request y por agente.
-- [ ] Dataset de evaluación: ~50 casos (por agente + casos adversariales).
-- [ ] LLM-as-judge para calidad de respuestas.
-- [ ] Métricas RAG con RAGAS: faithfulness, answer relevance, context precision.
-- [ ] Evals como gate de CI: correr suite antes de cambios grandes.
-- **Aprendizajes**: evaluación sistemática, tracing, regression testing de prompts.
+### ✅ Fase 7 — Evals y Observabilidad (3-4 días)
+- [x] Tracing JSONL: query, intención, respuesta, confidence, tiempo, fuentes.
+- [x] Dashboard de métricas (stats agregadas por intención).
+- [x] Dataset de evaluación: 33 casos (RAG, datos, acción, chat, adversarial).
+- [x] LLM-as-judge para calidad de respuestas.
+- [x] Métricas RAG: faithfulness, answer relevance, context precision.
+- [x] Resultado: 32/33 pass (97%), score promedio 0.970.
 
-### 🔲 Fase 8 — API, UI y Deploy (3-4 días)
-- [ ] FastAPI: endpoints de chat (SSE streaming), aprobaciones HITL, admin.
-- [ ] Streamlit UI completa: chat, panel de aprobaciones, dashboard de métricas.
-- [ ] Dockerizar (app + Chroma + Langfuse) con docker-compose.
-- [ ] README con arquitectura, decisiones y demo.
-- **Aprendizajes**: productización, async serving, deployment.
+### ✅ Fase 8 — API, UI y Deploy (3-4 días)
+- [x] FastAPI: /login, /chat, /hitl, /stats, /health, /me (8 endpoints).
+- [x] Frontend Next.js 16: Chat, HITL, Dashboard, Métricas (shadcn/ui + Tailwind 4).
+- [x] Streamlit UI legacy: chat, aprobaciones HITL, dashboard.
+- [x] Dockerizar (API + Streamlit) con docker-compose.
+- [x] README con arquitectura, decisiones y demo.
 
-### 🔲 Fase 9 — Red Teaming Final (2 días)
-- [ ] Suite de ataques automatizados: direct/indirect prompt injection, jailbreaks, exfiltración vía RAG (documentos envenenados), abuso de tools, SQL injection vía lenguaje natural.
-- [ ] Reporte: tasa de éxito de ataques antes/después de defensas.
-- [ ] Iterar defensas según resultados.
-- **Aprendizajes**: mentalidad adversarial, hardening real.
+### ✅ Fase 9 — Red Teaming Final (2 días)
+- [x] Suite de 31 ataques automatizados en 8 categorías.
+- [x] Defense-in-depth evaluator (4 capas).
+- [x] 4 vulnerabilidades encontradas y fixeadas (system prompt leak, RBAC bypass, email exfiltration, rate limit).
+- [x] Resultado: 31/31 ataques defendidos (100% defense rate).
 
-### 🔲 Extras opcionales (si quieres seguir)
-- Memoria long-term semántica por usuario.
-- MCP (Model Context Protocol) para exponer tools.
-- Fine-tuning ligero de un clasificador de intenciones.
-- Migración frontend a React + shadcn/ui.
-- Multi-modalidad (análisis de imágenes en tickets).
+### ✅ Fase 10 — Cierre y Documentación
+- [x] README.md completo con arquitectura, stack, resultados, guía de setup.
+- [x] PROGRESS.md con bitácora de todas las fases.
+- [x] SECURITY.md con política de reporte de vulnerabilidades.
+- [x] OPTIMIZATIONS.md con optimizaciones de latencia y pendientes.
+
+### 🔲 Extras (post-proyecto)
+- [ ] Migración a Supabase (auth + PostgreSQL) — resolver tickets compartidos
+- [ ] Migración a Pinecone (vector DB cloud)
+- [ ] Deploy en Render (API) + Vercel (frontend)
+- [ ] Evals con modelo híbrido (regression test)
+- [ ] Streaming al frontend (percepción de menor latencia)
+- [ ] Memoria long-term semántica por usuario
+- [ ] MCP (Model Context Protocol) para exponer tools
+- [ ] Multi-modalidad (análisis de imágenes en tickets)
 
 ---
 
