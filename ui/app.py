@@ -37,8 +37,6 @@ if "user" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "pending_hitl" not in st.session_state:
-    st.session_state.pending_hitl = []
 
 
 def api_headers():
@@ -104,7 +102,6 @@ if st.sidebar.button("Cerrar sesión"):
     st.session_state.token = None
     st.session_state.user = None
     st.session_state.messages = []
-    st.session_state.pending_hitl = []
     st.rerun()
 
 vista = st.sidebar.radio(
@@ -167,14 +164,9 @@ if vista == "💬 Chat":
             with st.expander("Detalles"):
                 st.json(metadata)
 
-            # Si requiere HITL, agregar a pendientes
+            # Si requiere HITL, avisar al usuario (la cola real está en el backend)
             if data.get("requires_hitl"):
                 st.warning("⏸️ Esta acción requiere aprobación humana. Ve a la vista 'Aprobaciones HITL'.")
-                st.session_state.pending_hitl.append({
-                    "thread_id": data["thread_id"],
-                    "query": prompt,
-                    "intencion": data["intencion"],
-                })
 
             st.session_state.messages.append({
                 "role": "assistant",
@@ -190,56 +182,85 @@ elif vista == "✅ Aprobaciones HITL":
 
     if st.session_state.user["role"] != "admin":
         st.warning("⚠️ Solo los administradores pueden aprobar/rechazar acciones.")
-    elif not st.session_state.pending_hitl:
-        st.info("No hay acciones pendientes de aprobación.")
     else:
-        for i, item in enumerate(st.session_state.pending_hitl):
-            with st.container(border=True):
-                st.write(f"**Thread:** `{item['thread_id']}`")
-                st.write(f"**Consulta:** {item['query']}")
-                st.write(f"**Intención:** {item['intencion']}")
+        with st.spinner("Cargando aprobaciones..."):
+            try:
+                resp = requests.get(
+                    f"{API_URL}/hitl/pending",
+                    headers=api_headers(),
+                    timeout=10,
+                )
+                if resp.status_code == 401:
+                    st.error("❌ Sesión expirada. Cierra sesión y vuelve a iniciar.")
+                    st.stop()
+                elif resp.status_code == 403:
+                    st.error("❌ No tienes permisos de admin.")
+                    st.stop()
+                elif resp.status_code != 200:
+                    st.error(f"❌ Error al cargar aprobaciones: {resp.status_code}")
+                    st.stop()
+                pending = resp.json()
+            except requests.exceptions.ConnectionError:
+                st.error("❌ No se pudo conectar a la API. ¿Está corriendo?")
+                st.stop()
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+                st.stop()
 
-                col1, col2 = st.columns(2)
+        if not pending:
+            st.info("No hay acciones pendientes de aprobación.")
+        else:
+            for i, item in enumerate(pending):
+                with st.container(border=True):
+                    st.write(f"**Thread:** `{item['thread_id']}`")
+                    st.write(f"**Consulta:** {item.get('query', '')}")
+                    st.write(f"**Intención:** {item.get('intencion', '')}")
 
-                with col1:
-                    if st.button(f"✅ Aprobar", key=f"approve_{i}"):
-                        try:
-                            resp = requests.post(
-                                f"{API_URL}/hitl/{item['thread_id']}/approve",
-                                headers=api_headers(),
-                                timeout=60,
-                            )
-                            if resp.status_code == 403:
-                                st.error("❌ No tienes permisos de admin.")
-                            else:
-                                data = resp.json()
-                                st.success(f"Aprobado: {data.get('respuesta', '')[:100]}")
-                        except Exception as e:
-                            st.error(f"Error: {e}")
+                    col1, col2 = st.columns(2)
 
-                        # Remover de pendientes
-                        st.session_state.pending_hitl.pop(i)
-                        st.rerun()
+                    with col1:
+                        if st.button("✅ Aprobar", key=f"approve_{i}"):
+                            try:
+                                resp = requests.post(
+                                    f"{API_URL}/hitl/{item['thread_id']}/approve",
+                                    headers=api_headers(),
+                                    timeout=60,
+                                )
+                                if resp.status_code == 401:
+                                    st.error("❌ Sesión expirada.")
+                                    st.stop()
+                                elif resp.status_code == 403:
+                                    st.error("❌ No tienes permisos de admin.")
+                                elif resp.status_code == 200:
+                                    data = resp.json()
+                                    st.success(f"Aprobado: {data.get('respuesta', '')[:100]}")
+                                else:
+                                    st.error(f"❌ Error {resp.status_code}: {resp.text[:200]}")
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                            st.rerun()
 
-                with col2:
-                    if st.button(f"❌ Rechazar", key=f"reject_{i}"):
-                        try:
-                            resp = requests.post(
-                                f"{API_URL}/hitl/{item['thread_id']}/reject",
-                                headers=api_headers(),
-                                timeout=60,
-                            )
-                            if resp.status_code == 403:
-                                st.error("❌ No tienes permisos de admin.")
-                            else:
-                                data = resp.json()
-                                st.warning(f"Rechazado: {data.get('respuesta', '')[:100]}")
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-
-                        # Remover de pendientes
-                        st.session_state.pending_hitl.pop(i)
-                        st.rerun()
+                    with col2:
+                        if st.button("❌ Rechazar", key=f"reject_{i}"):
+                            try:
+                                resp = requests.post(
+                                    f"{API_URL}/hitl/{item['thread_id']}/reject",
+                                    headers=api_headers(),
+                                    timeout=60,
+                                )
+                                if resp.status_code == 401:
+                                    st.error("❌ Sesión expirada.")
+                                    st.stop()
+                                elif resp.status_code == 403:
+                                    st.error("❌ No tienes permisos de admin.")
+                                elif resp.status_code == 200:
+                                    data = resp.json()
+                                    st.warning(f"Rechazado: {data.get('respuesta', '')[:100]}")
+                                else:
+                                    st.error(f"❌ Error {resp.status_code}: {resp.text[:200]}")
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                            st.rerun()
 
 
 # --- Vista: Dashboard ---

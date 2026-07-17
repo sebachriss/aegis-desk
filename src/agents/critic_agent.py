@@ -64,7 +64,13 @@ def critic_node(state: AgentState) -> dict:
     query = state["query"]
     respuesta = state["respuesta"]
     fuentes = state.get("fuentes", [])
+    intencion = state.get("intencion", "chat")
+    is_action = intencion == "accion"
     retries = state.get("retries", 0)
+    action_retries = state.get("action_retries", 0)
+
+    # Contador separado: acciones usan action_retries, el resto generation retries
+    current_retries = action_retries if is_action else retries
 
     fuentes_texto = ""
     if fuentes:
@@ -89,20 +95,33 @@ Evalúa esta respuesta y devuelve SOLO el JSON."""
     try:
         result = _extract_json(raw)
     except Exception:
-        return {
+        needs_retry = current_retries < MAX_RETRIES
+        updated = current_retries + 1 if needs_retry else current_retries
+        payload = {
             "confidence": 0.0,
-            "requires_human_review": False,
-            "retries": retries + 1 if retries < MAX_RETRIES else retries,
+            "requires_human_review": not needs_retry,
+            "requires_retry": needs_retry,
         }
+        if is_action:
+            payload["action_retries"] = updated
+        else:
+            payload["retries"] = updated
+        return payload
 
     confidence = float(result.get("confidence", 0.0))
     is_acceptable = confidence >= 0.7
 
-    needs_retry = not is_acceptable and retries < MAX_RETRIES
-    requires_human = not is_acceptable and retries >= MAX_RETRIES
+    needs_retry = not is_acceptable and current_retries < MAX_RETRIES
+    requires_human = not is_acceptable and current_retries >= MAX_RETRIES
+    updated = current_retries + 1 if needs_retry else current_retries
 
-    return {
+    payload = {
         "confidence": confidence,
         "requires_human_review": requires_human,
-        "retries": retries + 1 if needs_retry else retries,
+        "requires_retry": needs_retry,
     }
+    if is_action:
+        payload["action_retries"] = updated
+    else:
+        payload["retries"] = updated
+    return payload

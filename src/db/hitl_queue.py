@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.config import get_settings
+from src.security.pii_filter import filter_pii
 
 HITL_DB_PATH = Path(__file__).parent.parent.parent / "data" / "hitl_queue.sqlite"
 
@@ -21,6 +22,64 @@ HITL_DB_PATH = Path(__file__).parent.parent.parent / "data" / "hitl_queue.sqlite
 def _use_postgres() -> bool:
     settings = get_settings()
     return bool(settings.database_url or os.environ.get("DATABASE_URL"))
+
+
+def _hitl_expiry_threshold() -> datetime:
+    settings = get_settings()
+    return datetime.now() - timedelta(seconds=settings.hitl_expiration_seconds)
+
+
+def _is_expired(created_at_str: str | None) -> bool:
+    if not created_at_str:
+        return False
+    try:
+        created = datetime.fromisoformat(created_at_str)
+    except (ValueError, TypeError):
+        return False
+    return created < _hitl_expiry_threshold()
+
+
+# Campos de argumentos de tools que nunca deben persistirse en claro
+_SENSITIVE_ARGUMENT_KEYS = {
+    "cuerpo",
+    "descripcion",
+    "body",
+    "description",
+    "password",
+    "contraseña",
+    "token",
+    "api_key",
+    "apikey",
+    "secret",
+    "jwt",
+}
+
+
+def _redact_argument_value(key: str, value) -> str:
+    """Redacta valores sensibles de argumentos de tools."""
+    if isinstance(value, str) and value:
+        if any(s in key.lower() for s in _SENSITIVE_ARGUMENT_KEYS):
+            return "[REDACTADO]"
+        # Aplicar filtro de PII a textos libres
+        redacted, _ = filter_pii(value)
+        return redacted
+    return value
+
+
+def _redact_action_plan(action_plan: dict | None) -> dict | None:
+    """Devuelve una copia del action_plan con PII/secrets redactados antes de persistir."""
+    if not action_plan:
+        return action_plan
+    redacted = dict(action_plan)
+    arguments = redacted.get("arguments")
+    if isinstance(arguments, dict):
+        redacted["arguments"] = {
+            k: _redact_argument_value(k, v) for k, v in arguments.items()
+        }
+    # El reasoning puede contener datos sensibles del usuario
+    if "reasoning" in redacted and isinstance(redacted["reasoning"], str):
+        redacted["reasoning"], _ = filter_pii(redacted["reasoning"])
+    return redacted
 
 
 def _get_sqlite_db():
@@ -76,12 +135,17 @@ def enqueue(
     user: dict,
 ):
     now = datetime.now().isoformat()
-    if action_plan:
-        requested_by = action_plan.get("requested_by") or user.get("username")
-        role = action_plan.get("role") or user.get("role")
-        tool_name = action_plan.get("tool_name")
-        risk_level = action_plan.get("risk_level", "unknown")
-        action_plan_json = json.dumps(action_plan, ensure_ascii=False)
+
+    # Redactar PII/secrets antes de persistir en la cola HITL
+    redacted_query, _ = filter_pii(query)
+    redacted_action_plan = _redact_action_plan(action_plan)
+
+    if redacted_action_plan:
+        requested_by = redacted_action_plan.get("requested_by") or user.get("username")
+        role = redacted_action_plan.get("role") or user.get("role")
+        tool_name = redacted_action_plan.get("tool_name")
+        risk_level = redacted_action_plan.get("risk_level", "unknown")
+        action_plan_json = json.dumps(redacted_action_plan, ensure_ascii=False)
     else:
         requested_by = user.get("username")
         role = user.get("role")
@@ -92,7 +156,7 @@ def enqueue(
     values = (
         thread_id,
         "pending",
-        query,
+        redacted_query,
         intencion,
         requested_by,
         role,
@@ -177,8 +241,14 @@ def get_pending() -> list[dict]:
         WHERE status = 'pending'
         ORDER BY created_at ASC
     """
+    threshold_iso = _hitl_expiry_threshold().isoformat()
 
     def _sqlite_exec(conn):
+        conn.execute(
+            "UPDATE hitl_queue SET status = 'expired' WHERE status = 'pending' AND created_at < ?",
+            (threshold_iso,),
+        )
+        conn.commit()
         rows = conn.execute(sql).fetchall()
         items = []
         for row in rows:
@@ -195,6 +265,10 @@ def get_pending() -> list[dict]:
 
     def _postgres_exec(conn):
         with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE hitl_queue SET status = 'expired' WHERE status = 'pending' AND created_at < %s",
+                (threshold_iso,),
+            )
             cur.execute(sql)
             rows = cur.fetchall()
             cols = [desc[0] for desc in cur.description or []]
@@ -210,6 +284,24 @@ def get_pending() -> list[dict]:
                         pass
                 items.append(item)
             return items
+
+    if _use_postgres():
+        return _with_postgres(_postgres_exec)
+    return _with_sqlite(_sqlite_exec)
+
+
+def get_status(thread_id: str) -> str | None:
+    """Devuelve el estado de un thread en la cola HITL."""
+
+    def _sqlite_exec(conn):
+        row = conn.execute("SELECT status FROM hitl_queue WHERE thread_id = ?", (thread_id,)).fetchone()
+        return row["status"] if row else None
+
+    def _postgres_exec(conn):
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM hitl_queue WHERE thread_id = %s", (thread_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
     if _use_postgres():
         return _with_postgres(_postgres_exec)

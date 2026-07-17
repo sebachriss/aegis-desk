@@ -16,7 +16,7 @@ from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharac
 from src.db.pinecone_store import is_pinecone_configured, upsert_documents as upsert_pinecone
 from src.db.supabase_vector import is_supabase_vector_configured, upsert_documents as upsert_supabase
 from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
-from src.security.prompt_injection import sanitize_input
+from src.security.prompt_injection import detect_prompt_injection, sanitize_input
 
 # Ruta donde se guardan los documentos fuente
 DOCUMENTS_DIR = Path(__file__).parent / "documents"
@@ -47,6 +47,16 @@ def load_documents() -> list[Document]:
     return documents
 
 
+def _is_safe_chunk(chunk: Document) -> bool:
+    """Rechaza chunks que contengan intentos de inyeccion de instrucciones."""
+    text = chunk.page_content
+    injection_check = detect_prompt_injection(text)
+    if injection_check["is_injection"]:
+        print(f"    [RECHAZADO] chunk de {chunk.metadata.get('source', '?')} contiene inyeccion: {injection_check['matched_pattern']}")
+        return False
+    return True
+
+
 def split_documents(documents: list[Document]) -> list[Document]:
     """Parte documentos en chunks respetando la estructura Markdown.
 
@@ -58,6 +68,10 @@ def split_documents(documents: list[Document]) -> list[Document]:
     Paso 2: RecursiveCharacterTextSplitter
       Si alguna seccion es muy larga (>500 caracteres), la parte mas.
       chunk_overlap=50 para no cortar ideas a la mitad.
+
+    Paso 3: Filtro anti-inyeccion
+      Descarta chunks que contengan instrucciones de sistema, role overrides,
+      o patrones de prompt injection detectados por el security detector.
     """
     # Paso 1: partir por encabezados Markdown
     # Los encabezados que usamos: # (titulo), ## (seccion), ### (subseccion)
@@ -91,13 +105,20 @@ def split_documents(documents: list[Document]) -> list[Document]:
 
     chunks = size_splitter.split_documents(section_chunks)
 
+    # Paso 3: filtrar chunks con intentos de prompt injection / instrucciones ocultas
+    safe_chunks = [chunk for chunk in chunks if _is_safe_chunk(chunk)]
+    rejected = len(chunks) - len(safe_chunks)
+
     # Mostrar info de cada chunk para debug
-    for chunk in chunks:
+    for chunk in safe_chunks:
         header = chunk.metadata.get("header_2", chunk.metadata.get("header_1", ""))
         print(f"    [{chunk.metadata['source']}] {header} ({len(chunk.page_content)} chars)")
 
-    print(f"  Paso 2: {len(section_chunks)} secciones -> {len(chunks)} chunks finales")
-    return chunks
+    if rejected:
+        print(f"  [SEGURIDAD] {rejected} chunk(s) rechazados por contenido sospechoso")
+
+    print(f"  Paso 2/3: {len(section_chunks)} secciones -> {len(chunks)} chunks -> {len(safe_chunks)} seguros")
+    return safe_chunks
 
 
 def create_vectorstore(chunks: list[Document]) -> Chroma:

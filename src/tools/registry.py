@@ -10,7 +10,7 @@ Para añadir una nueva herramienta:
 """
 
 from src.tools.email import enviar_email
-from src.tools.sql import consultar_sql
+from src.tools.sql import consultar_sql_tool
 from src.tools.tickets import buscar_ticket, crear_ticket, listar_tickets
 
 # Registro de todas las herramientas disponibles
@@ -20,7 +20,7 @@ TOOLS = {
     "listar_tickets": listar_tickets,
     "buscar_ticket": buscar_ticket,
     "enviar_email": enviar_email,
-    "consultar_sql": consultar_sql,
+    "consultar_sql": consultar_sql_tool,
 }
 
 

@@ -7,12 +7,13 @@ al action_executor_node. Las acciones rechazadas o con decision invalida
 se marcan como rechazadas y no se ejecutan.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from langgraph.types import interrupt
 
 from src.agents.state import AgentState
+from src.config import get_settings
 
 
 def _redact_sensitive_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -21,6 +22,20 @@ def _redact_sensitive_args(tool_name: str, arguments: dict[str, Any]) -> dict[st
         # Mostrar solo destinatario; ocultar cuerpo y asunto del resumen HITL
         return {k: v for k, v in arguments.items() if k == "para"}
     return {k: v for k, v in arguments.items() if k not in {"password", "token", "api_key", "secret"}}
+
+
+def _is_action_expired(action_plan: dict) -> bool:
+    """Devuelve True si la acción expiró según la configuración del HITL."""
+    created_at = action_plan.get("created_at")
+    if not created_at:
+        return False
+    try:
+        created = datetime.fromisoformat(created_at)
+    except (ValueError, TypeError):
+        return False
+    settings = get_settings()
+    expires = created + timedelta(seconds=settings.hitl_expiration_seconds)
+    return datetime.now() > expires
 
 
 def hitl_node(state: AgentState) -> dict:
@@ -38,7 +53,7 @@ def hitl_node(state: AgentState) -> dict:
         }
 
     # Si ya fue ejecutada, no permitir cambios posteriores (replay protection)
-    if action_plan.get("execution_status") == "succeeded" or action_plan.get("executed_at"):
+    if action_plan.get("execution_status") in ("succeeded", "failed") or action_plan.get("executed_at"):
         return {
             "respuesta": "⚠️ Esta acción ya fue ejecutada. No se puede aprobar de nuevo.",
             "action_plan": {**action_plan, "approval_status": "rejected"},
@@ -49,6 +64,15 @@ def hitl_node(state: AgentState) -> dict:
     current_status = action_plan.get("approval_status")
     if current_status in ("approved", "rejected"):
         return {
+            "requires_human_review": False,
+        }
+
+    # Si expiró, rechazar automáticamente
+    if _is_action_expired(action_plan):
+        updated_plan = {**action_plan, "approval_status": "expired"}
+        return {
+            "respuesta": "⛔ La aprobación de esta acción expiró.",
+            "action_plan": updated_plan,
             "requires_human_review": False,
         }
 
@@ -71,9 +95,17 @@ Responde 'approve' para ejecutar o 'reject' para denegar.
 """
 
     # Pausar ejecucion hasta que un humano responda
-    decision = interrupt(resumen)
+    # El backend puede reanudar con un string o con un dict que incluya
+    # la decision y el usuario aprobador real (para auditoria correcta).
+    resume_value = interrupt(resumen)
 
-    approved_by = state.get("user_id", "unknown")
+    if isinstance(resume_value, dict):
+        decision = resume_value.get("decision", "").lower()
+        approved_by = resume_value.get("approved_by") or state.get("user_id", "unknown")
+    else:
+        decision = (resume_value or "").lower()
+        approved_by = state.get("user_id", "unknown")
+
     approved_at = datetime.now().isoformat()
 
     # Decision invalida: bloquear por seguridad y registrar quien intento

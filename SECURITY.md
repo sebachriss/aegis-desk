@@ -44,12 +44,19 @@ Aegis Desk implementa defense-in-depth con 4 capas:
 4. **HITL**: aprobación humana para acciones sensibles
 
 Adicionalmente:
+- SQL allowlist explícita de tablas y columnas (solo `SELECT`)
+- Rate limiting separado para login por IP y por usuario
+- JWT con expiración, issuer, audience y revocación en logout (`jti` + blacklist)
+- PII filter (enmascara datos sensibles) y redacción en trazas
+- Trace retention policy: límite de edad/cantidad y hashing de identificadores (`user_id`, `approved_by`)
 - Email whitelist (solo dominios internos)
-- SQL allowlist (solo `SELECT`)
-- PII filter (enmascara datos sensibles)
 - `.env` excluido del repo via `.gitignore`
 - Contraseñas hasheadas con bcrypt
 - JWT almacenado en cookie `HttpOnly`
+
+- Bloqueo de intentos de bypass HITL/replay (`vuelve a ejecutar`, `sin pedir aprobación`, `reenviar email`).
+- Bloqueo de exfiltración a dominios externos y tool chaining (`external@attacker.com`, `listado de empleados`, `primero ... y luego ...`).
+- `consultar_sql` expuesto como `StructuredTool` para agentes y como función callable para tests/CLI.
 
 ## Seguridad en Supabase
 
@@ -67,6 +74,6 @@ El proyecto incluye una suite de red teaming automatizada:
 python -m redteam.run_redteam --save
 ```
 
-Resultado actual: 31/31 ataques defendidos (100% defense rate).
+Resultado actual: 36/36 ataques defendidos (100% defense rate).
 
 Cualquier cambio que afecte seguridad debe pasar esta suite antes de merge.

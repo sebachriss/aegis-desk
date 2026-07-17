@@ -19,12 +19,67 @@ Para usar LangSmith en el futuro:
   LangChain auto-tracea si esas vars están seteadas.
 """
 
+import hashlib
+import hmac
 import json
+import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from src.config import get_settings
+from src.security.pii_filter import filter_pii
+
 TRACES_PATH = Path(__file__).parent.parent.parent / "data" / "traces.jsonl"
+
+# Política de retención de traces
+MAX_TRACES = 1000
+TRACE_RETENTION_DAYS = 30
+
+_trace_lock = threading.Lock()
+
+
+def _hash_identifier(value: str) -> str:
+    """Genera un hash determinista de un identificador para traces.
+
+    Usa HMAC-SHA256 con el JWT_SECRET, truncado a 16 caracteres hex.
+    Es reversible solo por quien posea el secret y el diccionario de usuarios.
+    """
+    if not value:
+        return value
+    secret = getattr(get_settings(), "jwt_secret", None) or "aegis-trace-secret"
+    return hmac.new(
+        secret.encode("utf-8"),
+        value.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:16]
+
+
+def _sanitize_action_plan(action_plan: dict | None) -> dict | None:
+    """Redacta argumentos sensibles de un action_plan antes de guardarlo en trace."""
+    if not action_plan:
+        return None
+    plan = dict(action_plan)
+    args = plan.get("arguments")
+    if isinstance(args, dict):
+        sanitized = {}
+        for k, v in args.items():
+            key_lower = k.lower()
+            if key_lower in {"password", "token", "api_key", "apikey", "secret", "passwd", "cuerpo", "asunto"}:
+                sanitized[k] = "***"
+            elif plan.get("tool_name") == "enviar_email" and key_lower != "para":
+                sanitized[k] = "***"
+            elif isinstance(v, str):
+                sanitized[k], _ = filter_pii(v)
+            else:
+                sanitized[k] = v
+        plan["arguments"] = sanitized
+
+    # Evitar almacenar IDs de usuario en texto plano en traces
+    for key in ("requested_by", "approved_by"):
+        if plan.get(key):
+            plan[key] = _hash_identifier(plan[key])
+    return plan
 
 
 def trace_execution(
@@ -42,6 +97,9 @@ def trace_execution(
     action_plan: dict | None = None,
     approved_by: str | None = None,
     approved_at: str | None = None,
+    retrieval_scores: list[float] | None = None,
+    discarded: int | None = None,
+    correlation_id: str | None = None,
 ) -> dict:
     """Registra una ejecución del grafo en el archivo de traces.
 
@@ -60,17 +118,22 @@ def trace_execution(
         action_plan: Plan de acción estructurado (Fase 2 HITL).
         approved_by: Usuario que aprobó una acción HITL.
         approved_at: Timestamp de aprobación HITL.
+        retrieval_scores: Scores de similitud de los chunks recuperados (RAG).
+        discarded: Chunks descartados por baja relevancia/fuente inválida (RAG).
+        correlation_id: ID de correlación de la request.
 
     Returns:
         Diccionario con el trace registrado.
     """
+    redacted_query, _ = filter_pii(query)
+    redacted_respuesta, _ = filter_pii(respuesta)
     trace = {
         "timestamp": datetime.now().isoformat(),
-        "user_id": user_id,
+        "user_hash": _hash_identifier(user_id),
         "role": role,
-        "query": query,
+        "query": redacted_query,
         "intencion": intencion,
-        "respuesta": respuesta,
+        "respuesta": redacted_respuesta,
         "confidence": confidence,
         "fuentes_count": len(fuentes),
         "fuentes": [f.get("source", "desconocido") for f in fuentes],
@@ -78,18 +141,53 @@ def trace_execution(
         "elapsed_seconds": round(elapsed_seconds, 3),
         "tool_name": tool_name,
         "authorization_decision": authorization_decision,
-        "action_plan": action_plan,
-        "approved_by": approved_by,
+        "action_plan": _sanitize_action_plan(action_plan),
+        "approved_by_hash": _hash_identifier(approved_by),
         "approved_at": approved_at,
+        "retrieval_scores": retrieval_scores,
+        "discarded": discarded,
+        "correlation_id": correlation_id,
     }
 
-    # Append al archivo JSONL (una línea por trace)
+    # Append al archivo JSONL (una línea por trace) y aplicar retención
     TRACES_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(TRACES_PATH, "a") as f:
-        f.write(json.dumps(trace, ensure_ascii=False) + "\n")
+    with _trace_lock:
+        with open(TRACES_PATH, "a") as f:
+            f.write(json.dumps(trace, ensure_ascii=False) + "\n")
+        _trim_traces()
 
     return trace
+
+
+def _trim_traces() -> None:
+    """Rota el archivo de traces por antigüedad y cantidad máxima."""
+    if not TRACES_PATH.exists():
+        return
+
+    cutoff = (datetime.now() - timedelta(days=TRACE_RETENTION_DAYS)).isoformat()
+
+    with open(TRACES_PATH) as f:
+        lines = f.readlines()
+
+    valid = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("timestamp", "") >= cutoff:
+            valid.append(line)
+
+    if len(valid) > MAX_TRACES:
+        valid = valid[-MAX_TRACES:]
+
+    with open(TRACES_PATH, "w") as f:
+        for line in valid:
+            f.write(line + "\n")
 
 
 def load_traces(limit: int = 100) -> list[dict]:

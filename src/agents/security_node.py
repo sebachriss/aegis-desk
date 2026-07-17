@@ -37,6 +37,7 @@ def security_node(state: AgentState) -> dict:
             "requires_human_review": False,
             "intencion": "bloqueado",
             "authorization_decision": "unknown_role",
+            "block_reason": "unknown_role",
         }
 
     # 2. Detectar prompt injection
@@ -47,6 +48,7 @@ def security_node(state: AgentState) -> dict:
             "confidence": 1.0,
             "requires_human_review": False,
             "intencion": "bloqueado",
+            "block_reason": "prompt_injection",
         }
 
     # 2. Rate limiting
@@ -57,6 +59,8 @@ def security_node(state: AgentState) -> dict:
             "confidence": 1.0,
             "requires_human_review": False,
             "intencion": "bloqueado",
+            "block_reason": "rate_limit",
+            "retry_after": rate_check.get("retry_after", 0),
         }
 
     # 3. Sanitizar input (quitar etiquetas peligrosas)

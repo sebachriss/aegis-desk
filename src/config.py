@@ -126,6 +126,16 @@ class Settings(BaseSettings):
         description="URL de conexión Postgres (ej. Supabase direct connection)",
     )
 
+    hitl_expiration_seconds: int = Field(
+        default=600,
+        description="Tiempo de expiración de aprobaciones HITL en segundos",
+    )
+
+    api_chat_timeout_seconds: float = Field(
+        default=30.0,
+        description="Timeout máximo para una invocación de /chat",
+    )
+
     # Configuración de pydantic-settings
     model_config = SettingsConfigDict(
         env_file=".env",

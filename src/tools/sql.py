@@ -148,8 +148,9 @@ def _validate_select(query: str) -> str | None:
     if not cleaned:
         return "Error: La consulta esta vacia o solo contiene comentarios."
 
-    # Detectar múltiples statements separados por punto y coma
-    if cleaned.count(";") > 0:
+    # Permitir punto y coma final (terminador), pero rechazar ; interno
+    cleaned = cleaned.rstrip(";")
+    if ";" in cleaned:
         return "Error: No se permiten múltiples sentencias SQL."
 
     first_word = re.split(r"\s+", cleaned, maxsplit=1)[0].upper()
@@ -158,7 +159,7 @@ def _validate_select(query: str) -> str | None:
 
     upper = cleaned.upper()
     for keyword in SQL_KEYWORDS_DENY:
-        if keyword in upper:
+        if re.search(rf"\b{keyword}\b", upper):
             return f"Error: '{keyword}' no esta permitido. Solo SELECT."
 
     return None
@@ -289,7 +290,6 @@ def _execute_postgres(query: str) -> str:
         conn.close()
 
 
-@tool
 def consultar_sql(query: str) -> str:
     """Ejecuta una consulta SQL de solo lectura (SELECT) sobre la base de datos de Aegis Corp.
 
@@ -350,3 +350,7 @@ def consultar_sql(query: str) -> str:
         return f"Error de SQL: {e}"
     finally:
         conn.close()
+
+
+consultar_sql_tool = tool(consultar_sql)
+# `consultar_sql` sigue siendo la función callable; `consultar_sql_tool` es el StructuredTool para agentes.

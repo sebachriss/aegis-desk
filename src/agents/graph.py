@@ -112,12 +112,12 @@ def route_from_critic(state: AgentState) -> str:
     Las acciones son ruteadas por action_plan desde route_from_planner.
     Este nodo solo maneja reintentos y revision humana por baja confianza.
     """
-    confidence = state.get("confidence", 1.0)
+    confidence = state.get("confidence", 0.0)
     requires_human = state.get("requires_human_review", False)
-    retries = state.get("retries", 0)
+    requires_retry = state.get("requires_retry", True)
     intencion = state.get("intencion", "chat")
 
-    # Si el critico marco revision humana explicita
+    # Si el critico marco revision humana explicita o ya no se permite reintento
     if requires_human:
         return "hitl_review"
 
@@ -125,11 +125,16 @@ def route_from_critic(state: AgentState) -> str:
     if confidence >= 0.7:
         return END
 
-    # Si la confianza es baja pero ya agoto los reintentos -> revision humana
-    if retries >= 2:
+    # Si la confianza es baja y el critico pide reintento, volver al worker.
+    if not requires_retry:
         return "hitl_review"
 
-    # Si la confianza es baja y quedan reintentos, volver al worker
+    # Para acciones, si ya se ejecutaron no las re-lanzamos (evita duplicar side effects).
+    if intencion == "accion":
+        action_plan = state.get("action_plan")
+        if action_plan and action_plan.get("execution_status") == "succeeded":
+            return "action_executor"
+
     routing = {
         "rag": "rag_agent",
         "datos": "data_agent",
@@ -211,7 +216,7 @@ def build_graph(checkpointer=None):
         },
     )
 
-    # critico -> (condicional) -> END, worker (reintento), o hitl_review
+    # critico -> (condicional) -> END, worker (reintento), action_executor o hitl_review
     graph.add_conditional_edges(
         "critic",
         route_from_critic,
@@ -220,6 +225,7 @@ def build_graph(checkpointer=None):
             "data_agent": "data_agent",
             "action_planner": "action_planner",
             "chat_agent": "chat_agent",
+            "action_executor": "action_executor",
             "hitl_review": "hitl_review",
             END: END,
         },
