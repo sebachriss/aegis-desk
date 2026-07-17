@@ -1,5 +1,18 @@
 # Aegis Desk — Plan Integral de Remediación
 
+## Estado de ejecución (2026-07-16)
+
+Este plan se implementó en la rama `remediation/2026-07-16`. A continuación el estado resumido:
+
+- ✅ **Fase 0 a 10 completadas**: RBAC real, HITL antes de efectos laterales, rate limit, SQL seguro, PII/RAG injection, idempotencia, persistencia en Supabase Postgres, API con JWT/CORS/validation, frontend Next.js con HttpOnly cookies, evals deterministas y Red Teaming 31/31 defendido.
+- ✅ **Integración Supabase**: `DATABASE_URL` apunta al pooler de Supabase; `scripts/migrate_postgres.py` crea tablas y checkpointer; `src/db/hitl_queue.py`, `src/tools/sql.py`, `src/tools/tickets.py` y `src/rag/` usan Postgres; `PostgresSaver` reemplaza SQLite cuando hay `DATABASE_URL`.
+- ✅ **Hardening de Supabase**: RLS habilitado en todas las tablas `public`; extensión `vector` en schema `extensions`; `DATABASE_URL` normalizada y con `search_path=public,extensions`.
+- ✅ **Auth**: JWT en cookie `HttpOnly` + auth local bcrypt + auth opcional Supabase para emails.
+- ✅ **Docker**: `docker compose up -d` levanta API, UI y frontend con healthchecks y limites de recursos.
+- ✅ **Tests**: `pytest` 18/18 passed, `npm run lint && npm run build` OK, Docker healthy.
+
+Las secciones originales del plan se conservan como bitácora de decisiones; los checkboxes más relevantes se marcan a lo largo del documento según el estado actual.
+
 ## 1. Propósito
 
 Este documento convierte la auditoría técnica en un plan ejecutable para corregir las falencias de seguridad, bugs funcionales, problemas de fiabilidad, deuda de pruebas y riesgos de despliegue identificados en Aegis Desk.
@@ -522,7 +535,7 @@ El agente ejecuta la tool antes de que `hitl_node` solicite aprobación. La dete
 - [x] Configurar secretos solo en runtime.
 - [x] Añadir límites de CPU, memoria y tamaño de logs.
 - [x] Añadir backup y restauración para SQLite (`scripts/backup_sqlite.py`).
-- [ ] Documentar despliegue real en Render/Vercel/Supabase/Pinecone si se migra.
+- [x] Documentar despliegue real en Render/Vercel/Supabase/Pinecone (documentado en README y AGENTS; migración a Supabase Postgres completada).
 
 ### Criterios de aceptación
 

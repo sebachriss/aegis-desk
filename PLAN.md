@@ -1,5 +1,18 @@
 # Aegis Desk — Plan Maestro del Proyecto
 
+## Estado actual (2026-07-16)
+
+El plan maestro se completó y se integró Supabase como backend principal:
+
+- Backend: FastAPI + LangGraph con checkpointer `PostgresSaver` (Supabase), HITL queue en Postgres, SQL/tickets en Supabase, RAG en Supabase pgvector.
+- Auth: local bcrypt + Supabase Auth opcional para emails; JWT en cookie `HttpOnly`.
+- Frontend: Next.js 16 con cookies HttpOnly; consume `/chat`, `/hitl/pending`, `/hitl/{id}/approve|reject`, `/stats`, `/health`.
+- Docker: `docker compose up -d` levanta API, UI legacy y frontend; healthchecks pasan.
+- Seguridad: RLS en todas las tablas `public`; `vector` en schema `extensions`; passwords con bcrypt; SQL read-only allowlist; email whitelist; PII filter.
+- Tests: `pytest` 18/18, frontend lint+build OK, Red Teaming 31/31 defendido.
+
+Las secciones siguientes describen el plan original; los detalles de implementación final se encuentran en `README.md`, `AGENTS.md` y `PROGRESS.md`.
+
 > Plataforma de Soporte Interno Inteligente Multi-Agente.
 > Proyecto de aprendizaje integral de AI Engineering: LLMs, RAG, multi-agentes,
 > LangChain/LangGraph, seguridad, human-in-the-loop, evals y observabilidad.

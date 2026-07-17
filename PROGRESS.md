@@ -1,5 +1,48 @@
 # Aegis Desk — Bitácora de Progreso
 
+## 2026-07-16 — Integración completa con Supabase
+
+- **Supabase Postgres como backend principal** (cuando `DATABASE_URL` está set):
+  - `src/db/postgres_utils.py`: conexión/psycopg pool con normalización de URL y `search_path=public,extensions`.
+  - `src/db/supabase_client.py`: cliente Supabase REST para operaciones admin con service key.
+  - `scripts/migrate_postgres.py`: crea tablas `empleados`, `departamentos`, `tickets`, `hitl_queue`, `document_embeddings` (vector 384 + HNSW) y tablas del checkpointer.
+- **HITL Queue persistente**: `src/db/hitl_queue.py` soporta PostgreSQL y SQLite fallback.
+- **Checkpointer en Supabase**: `PostgresSaver` de `langgraph-checkpoint-postgres` con fallback a SQLite.
+- **Vector store con pgvector**: `src/db/supabase_vector.py` con HNSW index; `src/rag/ingest.py` y `retriever.py` usan Supabase automáticamente si hay `DATABASE_URL`.
+- **SQL y tickets en Supabase**: `src/tools/sql.py` y `src/tools/tickets.py` conectan a Postgres via service key; `sql.py` sigue read-only.
+- **Auth opcional con Supabase**: `src/auth/supabase_auth.py` intenta login contra Supabase Auth cuando el username contiene `@`; fallback local con bcrypt.
+- **Hardening de seguridad en Supabase**:
+  - Extensión `vector` movida del schema `public` al schema `extensions`.
+  - RLS habilitado en todas las tablas `public`.
+  - `DATABASE_URL` con percent-encoding para `$`, `@` y `%` evita corrupción por Docker Compose.
+- **Frontend**: mantiene HttpOnly cookie JWT; lee HITL queue desde backend; build OK.
+- **Docker**:
+  - `Dockerfile`, `Dockerfile.ui` y `frontend/Dockerfile` actualizados.
+  - `docker compose up -d` levanta API (healthy), UI y frontend.
+  - Health check acelerado (`connect_timeout=1s`) para no superar timeout de Docker (5s).
+- **Tests**:
+  - `pytest tests/` → 18 passed.
+  - `npm run lint && npm run build` en frontend → OK.
+  - Login, chat, RAG, HITL approve, SQL y tickets verificados en Docker contra Supabase.
+- **Documentación actualizada**: `README.md`, `AGENTS.md`, `SECURITY.md`, `.env.example` y este archivo.
+
+## 2026-07-15 — Optimizaciones de latencia
+- **Fast path en supervisor**: regex para saludos triviales ("hola", "gracias", "adiós") sin LLM
+- **Skip crítico para chat**: chat con confidence >= 0.9 va directo a END
+- **HITL inteligente**: solo emails requieren aprobación humana, tickets pasan directo
+- **Fix HITL bug**: "listar mis tickets" pausaba porque "email" aparecía en título de ticket #3
+- **Modelo híbrido Groq + DeepInfra**:
+  - Supervisor: Groq Llama-3.1-8B-Instant (gratis, ~0.4s)
+  - Crítico: Groq Llama-3.3-70b-versatile (gratis, ~0.5s)
+  - Workers: DeepInfra DeepSeek-V4-Flash (calidad)
+  - Structured output: `function_calling` (json_schema no soportado en Groq, json_mode no garantiza schema)
+- **Resultados de latencia**:
+  - Datos: 11s → 3.4s (Groq 9.1x más rápido que DeepInfra en clasificación)
+  - RAG: 10s → 8.4s
+  - Tickets: 7s → 5.7s
+- **Frontend Next.js 16**: React 19 + shadcn/ui + Tailwind 4 + Recharts (Chat, HITL, Dashboard, Métricas)
+- **Pendiente resuelto**: migración a Supabase completada
+
 ## 2026-07-14
 - Proyecto definido. Plan maestro creado en `PLAN.md`.
 - Stack decidido: DeepInfra (DeepSeek-V4-Flash) + Groq, LangChain/LangGraph, FastAPI, Chroma, Streamlit.
@@ -44,7 +87,7 @@
 - **Fase 5 completada**:
   - `src/security/prompt_injection.py` — detección con regex + sanitize_input
   - `src/security/rbac.py` — roles empleado/admin con permisos de tools e intenciones
-  - `src/security/rate_limiter.py` — ventana deslizante 10 req/60s
+  - `src/security/rate_limiter.py` — ventana deslizante 10 req/120s
   - `src/security/pii_filter.py` — enmascara emails, teléfonos, DNIs, datos sensibles
   - `src/agents/security_node.py` — guardrails antes del supervisor (injection + rate limit)
   - Grafo actualizado: START → security → supervisor → workers → critic → END
@@ -68,8 +111,8 @@
   - `src/api/main.py` — FastAPI: /chat, /hitl/{id}/approve, /hitl/{id}/reject, /stats, /health
   - `ui/app.py` — Streamlit: Chat, Aprobaciones HITL, Dashboard de métricas
   - `Dockerfile` — imagen Python 3.11-slim
-  - `docker-compose.yml` — API (8000) + UI (8501) con volúmenes
-  - requirements: fastapi, uvicorn, streamlit, httpx
+  - `docker-compose.yml` — API (8000) + UI (8501) + frontend (3000) con volúmenes
+  - requirements: fastapi, uvicorn, streamlit, httpx, psycopg, langgraph-checkpoint-postgres, supabase
   - API probada: chat, HITL approve, HITL reject, stats — todo funcional
 - **Fase 9 completada**:
   - `redteam/attacks/payloads.json` — 31 ataques en 8 categorías
@@ -85,20 +128,3 @@
   - README.md actualizado con arquitectura final, todas las fases, resultados, y guía completa
   - Proyecto 100% completado — 10 fases, 0 pendientes
 - **PROYECTO COMPLETADO** ✅
-
-## 2026-07-15 — Optimizaciones de latencia
-- **Fast path en supervisor**: regex para saludos triviales ("hola", "gracias", "adiós") sin LLM
-- **Skip crítico para chat**: chat con confidence >= 0.9 va directo a END
-- **HITL inteligente**: solo emails requieren aprobación humana, tickets pasan directo
-- **Fix HITL bug**: "listar mis tickets" pausaba porque "email" aparecía en título de ticket #3
-- **Modelo híbrido Groq + DeepInfra**:
-  - Supervisor: Groq Llama-3.1-8B-Instant (gratis, ~0.4s)
-  - Crítico: Groq Llama-3.3-70b-versatile (gratis, ~0.5s)
-  - Workers: DeepInfra DeepSeek-V4-Flash (calidad)
-  - Structured output: `function_calling` (json_schema no soportado en Groq, json_mode no garantiza schema)
-- **Resultados de latencia**:
-  - Datos: 11s → 3.4s (Groq 9.1x más rápido que DeepInfra en clasificación)
-  - RAG: 10s → 8.4s
-  - Tickets: 7s → 5.7s
-- **Frontend Next.js 16**: React 19 + shadcn/ui + Tailwind 4 + Recharts (Chat, HITL, Dashboard, Métricas)
-- **Pendiente**: evals con modelo híbrido, migración a Supabase/Pinecone/Render/Vercel
