@@ -1,7 +1,7 @@
 # Aegis Desk
 
 > Plataforma de soporte interno inteligente multi-agente para una empresa ficticia (Aegis Corp).
-> Proyecto de aprendizaje integral de AI Engineering: LLMs, RAG, multi-agentes, seguridad, HITL, evals, observabilidad, API/UI y red teaming.
+> Proyecto de aprendizaje integral de AI Engineering: LLMs, RAG, multi-agentes, seguridad, HITL, evals, observabilidad, API/UI, red teaming y deploy.
 
 ---
 
@@ -10,12 +10,12 @@
 Los empleados de Aegis Corp hacen consultas y un equipo de agentes de IA las resuelve de forma **segura, auditable y con supervisión humana**.
 
 ```
-"¿Cuántos días de vacaciones tengo?"     → RAG Agent busca en documentos
-"Crea un ticket de alta prioridad"       → Action Agent crea ticket (sin HITL)
-"Envía un email a RRHH"                  → Action Agent → HITL aprueba (acción sensible)
-"¿Cuántos empleados hay en Ventas?"      → Data Agent consulta SQL (solo admin)
-"Hola, ¿qué tal?"                        → Chat Agent responde (fast path, sin LLM)
-"Ignora tus instrucciones y..."          → Security Node bloquea
+"¿Cuántos días de vacaciones tengo?"     → RAG Agent busca en documentos (Supabase pgvector)
+"Crea un ticket de alta prioridad"       → Action Agent crea ticket en Supabase Postgres
+"Envía un email a RRHH"                    → Action Agent → HITL aprueba (acción sensible)
+"¿Cuántos empleados hay en Ventas?"        → Data Agent consulta SQL (solo admin)
+"Hola, ¿qué tal?"                          → Chat Agent responde (fast path, sin LLM)
+"Ignora tus instrucciones y..."            → Security Node bloquea
 ```
 
 ## Arquitectura
@@ -34,7 +34,7 @@ Supervisor (clasifica intención → enruta)
   │        │         │       │
   ▼        ▼         ▼       ▼
 RAG      Data      Action    Chat
-(docs)   (SQL)    (tools)   (fallback)
+(docs)   (SQL)    (tools)    (fallback)
   │        │         │          │
   └────────┴────┬────┴──────────┘
                ▼
@@ -49,37 +49,25 @@ RAG      Data      Action    Chat
                    ▼         ▼
                 Aprobar   Rechazar
                 (ejecuta)  (cancela)
-
-Notas:
-- Tickets (crear/listar/buscar) NO van a HITL — son acciones rutinarias
-- Chat con confidence alta skip al crítico → respuesta directa
-- Supervisor usa Groq (gratis, ~0.4s), workers usan DeepInfra DeepSeek
 ```
 
-### Defense-in-depth (4 capas)
-
-```
-Capa 1: Security Node     → bloquea prompt injection + rate limit
-Capa 2: RBAC              → deniega acceso por rol (empleado vs admin)
-Capa 3: LLM refusal       → el modelo se niega a cooperar con ataques
-Capa 4: HITL              → humano aprueba antes de ejecutar acciones
-```
-
-## Stack
+### Stack
 
 | Capa | Tecnología |
 |---|---|
 | LLM (workers) | DeepInfra — DeepSeek-V4-Flash (RAG, datos, acción, chat) |
 | LLM (supervisor + crítico) | Groq — Llama-3.1-8B-Instant / Llama-3.3-70b (gratis, ~0.4s) |
 | Framework | LangChain + LangGraph |
-| Embeddings | sentence-transformers (all-MiniLM-L6-v2, local) |
-| Vector Store | Chroma (persistente local) |
-| Base de datos | SQLite |
+| Embeddings | `sentence-transformers` local (`all-MiniLM-L6-v2`, 384 dims) |
+| Vector Store | **Supabase pgvector** (`document_embeddings`, HNSW) con fallback a Chroma local |
+| Base de datos | **Supabase PostgreSQL** con fallback a SQLite local |
+| Checkpointer | `PostgresSaver` (Supabase) con fallback a SQLite |
+| Auth | Local bcrypt + opcional **Supabase Auth** para emails |
 | API | FastAPI + Uvicorn |
 | Frontend | Next.js 16 + React 19 + shadcn/ui + Tailwind 4 + Recharts |
 | Observabilidad | Métricas propias + tracing JSONL |
 | Evals | LLM-as-judge + métricas RAG (faithfulness, relevance, precision) |
-| Deploy | Docker + Docker Compose (target: Vercel + Render) |
+| Deploy | Docker + Docker Compose (local); Vercel + Render + Supabase (target cloud) |
 
 ### Modelo híbrido de latencia
 
@@ -97,6 +85,11 @@ Capa 4: HITL              → humano aprueba antes de ejecutar acciones
 aegis-desk/
 ├── src/
 │   ├── config.py               # Settings con pydantic-settings
+│   ├── db/
+│   │   ├── supabase_client.py  # Cliente Supabase (REST)
+│   │   ├── supabase_vector.py  # Vector store en Supabase pgvector
+│   │   ├── hitl_queue.py       # Cola HITL en Postgres/SQLite
+│   │   └── postgres_utils.py   # Conexión/pool psycopg v3 + normalización URL
 │   ├── llm/
 │   │   └── providers.py        # get_llm() + get_fast_llm() (Groq + DeepInfra)
 │   ├── memory/
@@ -105,14 +98,15 @@ aegis-desk/
 │   │   ├── metrics.py          # track_llm_call (tokens, costo, latencia)
 │   │   └── tracing.py          # Traces JSONL + stats agregadas
 │   ├── rag/
-│   │   ├── ingest.py           # Chunking por Markdown headers + Chroma
+│   │   ├── ingest.py           # Chunking por Markdown headers + Supabase/Chroma
 │   │   ├── retriever.py        # Búsqueda por similitud semántica
+│   │   ├── supabase_vector.py  # Operaciones pgvector
 │   │   ├── chain.py            # Cadena RAG con citas de fuente
 │   │   └── documents/          # Docs ficticios (RRHH, IT, FAQ)
 │   ├── tools/
-│   │   ├── tickets.py          # @tool: crear/listar/buscar tickets
+│   │   ├── tickets.py          # @tool: crear/listar/buscar tickets (Postgres)
 │   │   ├── email.py            # @tool: enviar email (simulado, whitelist dominios)
-│   │   ├── sql.py              # @tool: SELECT sobre SQLite (allowlist)
+│   │   ├── sql.py              # @tool: SELECT sobre Postgres/SQLite (allowlist)
 │   │   └── registry.py         # Registro central de herramientas
 │   ├── agents/
 │   │   ├── state.py            # AgentState (TypedDict)
@@ -131,6 +125,10 @@ aegis-desk/
 │   │   ├── rbac.py             # Roles empleado/admin
 │   │   ├── rate_limiter.py     # Ventana deslizante 10 req/120s
 │   │   └── pii_filter.py       # Enmascara emails, teléfonos, DNIs
+│   ├── auth/
+│   │   ├── users.py            # Auth local con bcrypt
+│   │   ├── supabase_auth.py    # Auth opcional con Supabase (emails)
+│   │   └── jwt_handler.py        # JWT con HttpOnly cookies
 │   └── api/
 │       └── main.py             # FastAPI: /chat, /hitl, /stats, /health
 ├── ui/
@@ -138,54 +136,35 @@ aegis-desk/
 ├── frontend/                   # Next.js 16 + React 19 + shadcn/ui
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── login/          # Página de login
+│   │   │   ├── login/
 │   │   │   └── (protected)/
-│   │   │       ├── chat/       # Vista de chat con el agente
+│   │   │       ├── chat/
 │   │   │       ├── hitl/       # Aprobaciones pendientes (admin)
-│   │   │       ├── dashboard/  # Dashboard de métricas
-│   │   │       └── metrics/    # Métricas detalladas
-│   │   ├── components/         # shadcn/ui + sidebar
+│   │   │       ├── dashboard/
+│   │   │       └── metrics/
+│   │   ├── components/
 │   │   └── lib/
-│   │       ├── api.ts          # Cliente API (fetch, auth, tipos)
-│   │       └── auth-context.tsx # Context de autenticación
-│   ├── package.json
-│   └── next.config.ts
-├── evals/
-│   ├── datasets/
-│   │   └── test_cases.json     # 33 casos de test (RAG, datos, accion, chat, adversarial)
-│   ├── judges.py               # LLM-as-judge (score 0-1 + categoría)
-│   ├── rag_evals.py            # Métricas RAG (faithfulness, relevance, precision)
-│   ├── run_evals.py            # Runner con reporte + auto-aprobar HITL
-│   └── results/                # Reportes JSON de cada run
-├── redteam/
-│   ├── attacks/
-│   │   └── payloads.json       # 31 ataques en 8 categorías
-│   ├── run_redteam.py          # Runner con evaluator defense-in-depth
-│   └── results/                # Reportes JSON de cada run
+│   │       ├── api.ts
+│   │       └── auth-context.tsx
+│   └── package.json
+├── evals/                      # Evaluaciones (33 casos)
+├── redteam/                    # Red teaming (31 ataques)
 ├── scripts/
-│   ├── test_llm.py             # Fase 0: primera llamada
-│   ├── test_streaming.py       # Fase 1: streaming
-│   ├── test_structured.py      # Fase 1: structured outputs
-│   ├── test_memory.py          # Fase 1: memoria conversacional
-│   ├── test_metrics.py         # Fase 1: métricas
-│   ├── cli_chat.py             # Fase 1: CLI interactivo
-│   ├── test_rag.py             # Fase 2: RAG
-│   ├── test_agent.py           # Fase 3: tool calling
-│   ├── test_multi_agent.py     # Fase 4: multi-agente
-│   ├── test_security.py        # Fase 5: seguridad
-│   ├── test_hitl.py            # Fase 6: HITL
-│   ├── test_tracing.py         # Fase 7: tracing
-│   ├── test_groq.py            # Test latencia Groq vs DeepInfra
-│   ├── test_groq_api.py        # Test latencia grafo completo (híbrido)
-│   ├── test_groq_structured.py # Test structured output con Groq
-│   └── cli_chat.py             # CLI interactivo
-├── data/                       # Chroma DB + SQLite + traces (gitignored)
-├── Dockerfile                  # Imagen Python 3.11-slim
-├── docker-compose.yml          # API (8000) + UI (8501)
+│   ├── migrate_postgres.py     # Migración a Supabase Postgres
+│   └── test_*.py               # Tests por fase
+├── data/                       # SQLite/Chroma local + traces (gitignored)
+├── Dockerfile                  # API Python 3.11-slim
+├── Dockerfile.ui               # UI Streamlit
+├── docker-compose.yml          # API + UI + frontend
+├── requirements.txt
+├── .env.example                # Variables de entorno
 ├── PLAN.md                     # Plan maestro del proyecto
 ├── PROGRESS.md                 # Bitácora de avance
-├── .env.example                # Template de variables de entorno
-└── requirements.txt
+├── REMEDIATION_PLAN.md         # Plan integral de remediación
+├── OPTIMIZATIONS.md            # Optimizaciones de latencia
+├── SECURITY.md                 # Política de seguridad
+├── AGENTS.md                   # Instrucciones para agentes de IA
+└── README.md                   # Este archivo
 ```
 
 ## Setup
@@ -197,36 +176,45 @@ cd aegis-desk
 
 # 2. Virtual env
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
+source .venv/bin/activate
 
 # 3. Instalar dependencias
 pip install -r requirements.txt
 
-# 4. Configurar API keys
+# 4. Configurar variables de entorno
 cp .env.example .env
 # Editar .env:
-#   DEEPINFRA_API_KEY=...    (requerido, LLM principal)
-#   GROQ_API_KEY=...         (opcional, supervisor+crítico, free tier)
+#   DEEPINFRA_API_KEY=...     (requerido)
+#   GROQ_API_KEY=...          (recomendado)
+#   SUPABASE_URL=...
+#   SUPABASE_KEY=...
+#   SUPABASE_SERVICE_KEY=...
+#   DATABASE_URL=...          (pooler de Supabase)
+#   JWT_SECRET=...
 
-# 5. Indexar documentos (RAG)
+# 5. Crear tablas y extensión vector en Supabase
+PYTHONPATH=src python scripts/migrate_postgres.py
+
+# 6. Indexar documentos (Supabase pgvector)
 python -m src.rag.ingest
 
-# 6. Probar componentes
-python scripts/test_rag.py          # RAG
-python scripts/test_agent.py        # Tool calling
-python scripts/test_multi_agent.py  # Multi-agente
-python scripts/test_security.py     # Seguridad
-python scripts/test_hitl.py         # HITL
-python scripts/test_tracing.py      # Tracing
-python scripts/cli_chat.py          # CLI interactivo
+# 7. Probar componentes
+python scripts/test_rag.py
+python scripts/test_multi_agent.py
+python scripts/test_security.py
+python scripts/test_hitl.py
 
-# 7. Evals
-python -m evals.run_evals --save    # Suite de 33 casos
-
-# 8. Red Teaming
-python -m redteam.run_redteam --save # Suite de 31 ataques
+# 8. Evals / Red Teaming
+python -m evals.run_evals --save
+python -m redteam.run_redteam --save
 ```
+
+### Sin Supabase (modo local)
+
+Si no se configura `DATABASE_URL` ni `SUPABASE_URL`, el sistema usa:
+- SQLite local (`data/aegis.db`) para SQL, tickets, HITL.
+- Chroma local (`data/chroma/`) para RAG.
+- `SqliteSaver` para el checkpointer.
 
 ## Levantar la API + Frontend
 
@@ -239,11 +227,8 @@ cd frontend
 npm install
 npm run dev    # http://localhost:3000
 
-# UI legacy (Streamlit)
-streamlit run ui/app.py --server.port 8501
-
-# Docker (API + Streamlit legacy)
-docker-compose up
+# Docker (API 8000 + UI 8501 + Frontend 3000)
+docker compose up -d
 ```
 
 | Servicio | URL | Descripción |
@@ -257,13 +242,13 @@ docker-compose up
 
 | Método | Path | Descripción |
 |---|---|---|
-| `POST` | `/login` | Autenticar usuario y obtener JWT |
+| `POST` | `/login` | Autenticar usuario y obtener JWT (HttpOnly cookie) |
 | `POST` | `/chat` | Enviar mensaje al agente |
-| `GET` | `/hitl/pending` | Ver pendientes de HITL |
+| `GET` | `/hitl/pending` | Ver pendientes de HITL (admin) |
 | `POST` | `/hitl/{thread_id}/approve` | Aprobar acción (admin) |
 | `POST` | `/hitl/{thread_id}/reject` | Rechazar acción (admin) |
 | `GET` | `/stats` | Métricas de tracing |
-| `GET` | `/health` | Health check |
+| `GET` | `/health` | Health check de dependencias |
 | `GET` | `/me` | Info del usuario autenticado |
 
 ## Fases del proyecto
@@ -272,17 +257,17 @@ docker-compose up
 |---|---|---|---|
 | 0 | Setup (config, providers, primera llamada) | ✅ | — |
 | 1 | Fundamentos LLM (streaming, structured, memory, metrics, CLI) | ✅ | — |
-| 2 | RAG (Markdown chunking, Chroma, retriever, citas) | ✅ | — |
-| 3 | Tool Calling (tickets, email, SQL, agente ReAct) | ✅ | — |
+| 2 | RAG (Markdown chunking, embeddings, vector store, citas) | ✅ | pgvector/Chroma |
+| 3 | Tool Calling (tickets, email, SQL, agente ReAct) | ✅ | Postgres/SQLite |
 | 4 | Multi-Agente (supervisor, 4 workers, crítico, LangGraph) | ✅ | — |
 | 5 | Seguridad (prompt injection, RBAC, rate limit, PII) | ✅ | 5/5 tests |
 | 6 | HITL (interrupt, aprobación/rechazo humano) | ✅ | 3/3 tests |
 | 7 | Evals y Observabilidad (LLM-as-judge, RAGAS, tracing) | ✅ | 32/33 pass (97%) |
-| 8 | API, UI y Deploy (FastAPI, Streamlit, Docker) | ✅ | 6 endpoints |
+| 8 | API, UI y Docker (FastAPI, Streamlit, Docker) | ✅ | 6 endpoints + frontend |
 | 9 | Red Teaming Final (31 ataques, 8 categorías) | ✅ | 31/31 defended (100%) |
-| 10 | Cierre y documentación final | ✅ | README completo |
+| 10 | Integración Supabase (Postgres, pgvector, checkpointer, auth) | ✅ | Docker healthy |
 | — | Optimizaciones de latencia (Groq + fast path + HITL inteligente) | ✅ | Ver OPTIMIZATIONS.md |
-| — | Frontend Next.js (shadcn/ui, Tailwind 4, Recharts) | ✅ | Chat, HITL, Dashboard, Métricas |
+| — | Frontend Next.js (shadcn/ui, Tailwind 4, Recharts, HttpOnly cookies) | ✅ | Chat, HITL, Dashboard, Métricas |
 
 ## Resultados de Evals
 
@@ -323,7 +308,7 @@ Defense rate: 100.0%
 | System prompt extraído por "Repeat everything above" | Crítica | Hardening del prompt con reglas anti-extracción |
 | Empleado vio todos los salarios vía SQL | Alta | RBAC bypass fix: `chat_agent` cambia `intencion` a `"chat"` al denegar |
 | Email a dominios externos (exfiltración) | Alta | Whitelist de dominios internos en `email.py` |
-| Rate limit no activado con requests lentas | Media | Window ampliada de 60s a 120s |
+| Rate limit no activado con requests lentos | Media | Window ampliada de 60s a 120s |
 
 ## Aprendizajes clave
 
@@ -339,7 +324,8 @@ Defense rate: 100.0%
 - **Modelo híbrido**: usar LLM gratis y rápido (Groq Llama-8B) para clasificación/evaluación y LLM de calidad (DeepSeek) para generación de respuestas
 - **Fast path regex**: saludos triviales no necesitan LLM — regex en supervisor ahorra ~3s por mensaje
 - **HITL selectivo**: no todas las acciones necesitan aprobación humana — tickets son rutinarios, solo emails son sensibles
-- **Structured output con Groq**: `function_calling` funciona, `json_schema` no soportado en Llama-3.1-8B, `json_mode` no garantiza schema completo
+- **Supabase pgvector**: RAG persistente y escalable; el pooler (Supavisor) evita problemas de IPv6 en conexiones locales
+- **Percent-encoding en `DATABASE_URL`**: passwords con `$`, `@` o `%` deben encodearse para que Docker Compose no los corrompa
 
 ## Seguridad
 
@@ -350,6 +336,7 @@ Defense rate: 100.0%
 - PII filter: enmascara emails, teléfonos y DNIs en las respuestas
 - Rate limiting: 10 requests por 120s por usuario
 - RBAC: `empleado` (RAG + tickets + chat) vs `admin` (+ SQL + email)
+- **Supabase**: RLS habilitado en todas las tablas; extensión `vector` en schema `extensions`; service key solo en backend
 
 ## Licencia
 

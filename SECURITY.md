@@ -28,6 +28,7 @@ Vulnerabilidades en scope:
 - Fuga de información sensible (system prompt, API keys, datos de usuarios)
 - Injection attacks (SQL, command, etc.)
 - Bugs que permitan ejecutar acciones sin HITL
+- Configuraciones inseguras de Supabase/Postgres (RLS, secrets en imágenes, etc.)
 
 Fuera de scope:
 - El proyecto usa tools simuladas (no hay riesgo real de envío de emails o modificación de DBs externas)
@@ -44,9 +45,19 @@ Aegis Desk implementa defense-in-depth con 4 capas:
 
 Adicionalmente:
 - Email whitelist (solo dominios internos)
-- SQL allowlist (solo SELECT)
+- SQL allowlist (solo `SELECT`)
 - PII filter (enmascara datos sensibles)
 - `.env` excluido del repo via `.gitignore`
+- Contraseñas hasheadas con bcrypt
+- JWT almacenado en cookie `HttpOnly`
+
+## Seguridad en Supabase
+
+- **RLS habilitado** en todas las tablas `public` (`empleados`, `departamentos`, `tickets`, `hitl_queue`, `document_embeddings`, tablas de checkpointer).
+- **Extensión `vector`** ubicada en el schema `extensions` (best practice de Supabase).
+- **Conexión directa** a Postgres usa `DATABASE_URL` con usuario `postgres` (owner) y service key solo para operaciones admin/migraciones.
+- **Percent-encoding** recomendado en `DATABASE_URL` para `$`, `@` y `%` cuando se usa con Docker Compose.
+- `SUPABASE_SERVICE_KEY` y `SUPABASE_KEY` nunca se escriben en código; se inyectan via `.env`.
 
 ## Red Teaming
 

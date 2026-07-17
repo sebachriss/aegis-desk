@@ -1,0 +1,124 @@
+# Aegis Desk — Agent Instructions
+
+Aegis Desk es una plataforma de soporte interno inteligente multi-agente en Python 3.11+ (backend FastAPI + LangGraph) y Next.js 16 (frontend). Este archivo guía a cualquier agente de IA (Devin, Cursor, Cascade, etc.) que trabaje en el repo.
+
+## Propósito y arquitectura
+
+```
+Usuario
+  │
+  ▼
+Security Node (prompt injection + rate limit + sanitize)
+  │
+  ▼
+Supervisor (clasifica intención → enruta a worker)
+  │        │           │           │
+  ▼        ▼           ▼           ▼
+RAG     Data       Action       Chat
+(docs)  (SQL)      (tools)      (fallback)
+  │        │           │
+  └────────┴────┬──────┘
+                ▼
+            Crítico
+                │
+       ┌────────┴────────┐
+       ▼                 ▼
+ Respuesta OK        HITL (solo acciones sensibles)
+```
+
+- **Workers**: RAG Agent, Data Agent, Action Agent, Chat Agent.
+- **Modelos**: DeepInfra `DeepSeek-V4-Flash` para workers; Groq `Llama-3.1-8B-Instant` / `Llama-3.3-70b` para supervisor y crítico.
+- **RAG**: `sentence-transformers` local (`all-MiniLM-L6-v2`) + **Supabase pgvector** (`src/db/supabase_vector.py`) con fallback a Chroma local.
+- **Datos**: **Supabase PostgreSQL** cuando `DATABASE_URL` está set; SQLite/Chroma como fallback local.
+- **Checkpointer**: `langgraph-checkpoint-postgres` (`PostgresSaver`) con `psycopg[binary]`, con fallback a `langgraph-checkpoint-sqlite`.
+- **HITL Queue**: persistida en PostgreSQL (`src/db/hitl_queue.py`) cuando `DATABASE_URL` está set, con fallback a SQLite.
+- **Auth**: local bcrypt (`src/auth/users.py`) + opcional **Supabase Auth** para emails (`src/auth/supabase_auth.py`).
+- **Frontend**: Next.js 16 + React 19 + shadcn/ui + Tailwind 4. Ver `frontend/AGENTS.md` para reglas específicas del frontend.
+
+## Variables de entorno clave
+
+Copiar `.env.example` a `.env` y completar:
+
+- `DEEPINFRA_API_KEY` — obligatorio para workers.
+- `GROQ_API_KEY` — opcional, recomendado para supervisor/crítico.
+- `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_KEY` — para Supabase Auth y operaciones admin.
+- `DATABASE_URL` — conexión directa a Postgres (pooler de Supabase). Si el password tiene `$`, `@` o `%`, percent-encodearlos.
+- `JWT_SECRET` — cambiar en producción.
+- `CORS_ORIGINS` — restringir en producción.
+- `LANGSMITH_*` — opcional, para tracing visual.
+
+## Setup del entorno
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# Editar .env con DEEPINFRA_API_KEY, GROQ_API_KEY y credenciales de Supabase
+
+# Crear/migrar tablas en Supabase (o SQLite fallback)
+PYTHONPATH=src python scripts/migrate_postgres.py
+
+# Indexar documentos (usa Supabase pgvector si DATABASE_URL está set)
+python -m src.rag.ingest
+```
+
+## Comandos de uso frecuente
+
+| Comando | Propósito |
+|---|---|
+| `uvicorn src.api.main:app --port 8000` | Levantar API FastAPI |
+| `python scripts/test_multi_agent.py` | Probar grafo multi-agente |
+| `python -m evals.run_evals --save` | Suite de evaluaciones (33 casos) |
+| `python -m redteam.run_redteam --save` | Suite de red teaming (31 ataques) |
+| `python scripts/cli_chat.py` | CLI interactivo para debug |
+| `cd frontend && npm install && npm run dev` | Levantar frontend Next.js |
+| `docker compose up -d` | Levantar API + UI + frontend con Docker |
+| `PYTHONPATH=src python scripts/migrate_postgres.py` | Migrar tablas/checkpointer a Postgres |
+
+## Estilo y convenciones
+
+- Python 3.11+ con anotaciones de tipo (`typing`, `TypedDict` para `AgentState`).
+- Cada módulo tiene docstring con propósito, estructura y ejemplos.
+- Nombres en español para el dominio de negocio: `intencion`, `respuesta`, `fuentes`.
+- Cada herramienta nueva en `src/tools/` se registra en `src/tools/registry.py`.
+- Cada worker nuevo en `src/agents/` se conecta en `src/agents/supervisor.py` y `src/agents/graph.py`.
+
+## Cómo añadir un worker
+
+1. Crear `src/agents/<nombre>_agent.py` con función `<nombre>_node(state: AgentState) -> dict`.
+2. Actualizar `src/agents/state.py` si necesitas nuevos campos de estado.
+3. Añadir la intención/ruta en `src/agents/supervisor.py`.
+4. Añadir nodo y edges en `src/agents/graph.py`.
+5. Crear `scripts/test_<nombre>_agent.py`.
+6. Añadir casos de eval en `evals/datasets/test_cases.json`.
+7. Correr `python scripts/test_multi_agent.py`, `python -m evals.run_evals --save` y `python -m redteam.run_redteam --save`.
+
+## Cómo añadir una herramienta
+
+1. Crear función decorada con `@tool` en `src/tools/<nombre>.py`.
+2. Importarla en `src/tools/registry.py` y añadirla al diccionario `TOOLS`.
+3. Actualizar `src/security/rbac.py` si tiene permisos especiales por rol.
+4. Añadir tests y payloads de red teaming si expone nueva superficie de ataque.
+
+## Seguridad y guardrails
+
+- NO escribir secretos en código. Usar `src/config.py` + variables de entorno.
+- SQL: solo `SELECT`. No permitir `INSERT`, `UPDATE`, `DELETE`, `DROP`.
+- Email: solo dominios de la whitelist (`aegiscorp.com`, `aegis.com`).
+- RBAC: `empleado` vs `admin`. Verificar `can_access(role, intencion)`.
+- **Supabase**: tablas tienen RLS habilitado; vector extension en schema `extensions`; service key solo en backend.
+- Cualquier cambio en `src/security/` debe pasar `python scripts/test_security.py` y `python -m redteam.run_redteam --save`.
+
+## Evals, observabilidad y trazas
+
+- `evals/run_evals.py`: 33 casos, guarda en `evals/results/`.
+- `redteam/run_redteam.py`: 31 ataques, guarda en `redteam/results/`.
+- Métricas en `src/observability/metrics.py` y trazas JSONL en `data/traces.jsonl`.
+
+## Reglas de debugging
+
+- Si el grafo falla, revisar en orden: `src/agents/state.py` → nodo problemático → `src/agents/graph.py`.
+- Si un eval falla, reproducir con `python scripts/cli_chat.py` o el script de fase correspondiente.
+- Si hay brecha de seguridad, reproducir con `python -m redteam.run_redteam --category <categoria>`.
+- Si falla conexión a Supabase, verificar `DATABASE_URL`, percent-encoding de caracteres especiales y pooler (Supavisor).
