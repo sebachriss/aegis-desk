@@ -48,6 +48,7 @@ def get_postgres_pool(conninfo: str | None = None, **kwargs):
         raise RuntimeError("DATABASE_URL no configurada")
 
     normalized = normalize_database_url(conninfo)
+    kwargs.setdefault("options", "-c search_path=public,extensions")
     _pool = psycopg_pool.ConnectionPool(
         normalized,
         min_size=1,
@@ -77,6 +78,9 @@ def get_postgres_connection(conninfo: str | None = None, *, read_only: bool = Fa
         raise RuntimeError("DATABASE_URL no configurada")
 
     normalized = normalize_database_url(conninfo)
+    options = kwargs.get("options", "")
+    options += " -c search_path=public,extensions"
     if read_only:
-        kwargs.setdefault("options", "-c default_transaction_read_only=on")
+        options += " -c default_transaction_read_only=on"
+    kwargs["options"] = options.strip()
     return psycopg.connect(normalized, **kwargs)
