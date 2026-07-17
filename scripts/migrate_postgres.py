@@ -22,12 +22,39 @@ except ImportError as exc:
 from src.db.postgres_utils import normalize_database_url, get_postgres_connection
 
 
+def _enable_rls(cur):
+    """Habilita Row Level Security en todas las tablas del schema public."""
+    cur.execute("""
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename NOT LIKE 'pg_%'
+          AND tablename NOT LIKE 'sql_%'
+    """)
+    for (table,) in cur.fetchall():
+        cur.execute(f'ALTER TABLE public."{table}" ENABLE ROW LEVEL SECURITY')
+
+
 def _enable_vector(cur):
-    """Habilita la extension pgvector si es posible."""
+    """Habilita la extension pgvector en el schema extensions (best practice de Supabase)."""
     try:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        cur.execute("CREATE SCHEMA IF NOT EXISTS extensions")
+        # Crear en extensions; si ya existe en public, moverla
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA extensions")
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_extension e
+                    JOIN pg_namespace n ON e.extnamespace = n.oid
+                    WHERE e.extname = 'vector' AND n.nspname = 'public'
+                ) THEN
+                    EXECUTE 'ALTER EXTENSION vector SET SCHEMA extensions';
+                END IF;
+            END $$;
+        """)
     except psycopg.Error as exc:
-        print(f"Advertencia: no se pudo crear extension vector: {exc}")
+        print(f"Advertencia: no se pudo crear/mover extension vector: {exc}")
         print("Habilitala manualmente desde Supabase: Database > Extensions > vector")
 
 
@@ -161,6 +188,12 @@ def main() -> None:
                     print("Tablas del checkpointer creadas.")
             except Exception as exc:
                 print(f"Advertencia: no se pudieron crear tablas del checkpointer: {exc}")
+
+            # Habilitar RLS en todas las tablas public
+            with conn.cursor() as cur:
+                _enable_rls(cur)
+                conn.commit()
+            print("RLS habilitado en tablas public.")
 
             print("Migración completada.")
     finally:
