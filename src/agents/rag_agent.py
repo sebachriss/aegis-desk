@@ -21,4 +21,6 @@ def rag_node(state: AgentState) -> dict:
     return {
         "respuesta": resultado["answer"],
         "fuentes": resultado["sources"],
+        "retrieval_scores": resultado.get("retrieval_scores", []),
+        "discarded": resultado.get("discarded", 0),
     }

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 import hashlib
 import json
+import uuid
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -65,8 +66,8 @@ def _determine_risk_level(tool_name: str) -> str:
 
 
 def _new_action_id() -> str:
-    """Genera un id unico para la accion."""
-    return f"act_{datetime.now().isoformat()}"
+    """Genera un id unico para la accion (unico entre procesos)."""
+    return f"act_{uuid.uuid4().hex}_{datetime.now().isoformat()}"
 
 
 def _idempotency_key(tool_name: str, arguments: dict) -> str:
@@ -165,6 +166,7 @@ def action_planner_node(state: AgentState) -> dict:
         "approval_status": approval_status,
         "execution_status": "not_started",
         "idempotency_key": _idempotency_key(tool_name, plan.arguments),
+        "created_at": datetime.now().isoformat(),
         "executed_at": None,
         "reasoning": plan.reasoning,
     }
@@ -224,11 +226,18 @@ def action_executor_node(state: AgentState) -> dict:
     tool = TOOLS[tool_name]
     arguments = action_plan.get("arguments", {})
 
-    # Inyectar ownership/auditoria solo al crear tickets
-    if tool_name == "crear_ticket":
+    # Inyectar ownership/auditoria para tickets
+    if tool_name in ("crear_ticket", "listar_tickets", "buscar_ticket"):
         arguments = dict(arguments)
-        if "created_by" in tool.args and not arguments.get("created_by"):
-            arguments["created_by"] = state.get("user_id", "unknown")
+        user_id = state.get("user_id", "unknown")
+        role = state.get("role", "empleado")
+        arguments["role"] = role
+        # Siempre registrar quien realmente ejecuta la accion;
+        # el rol admin puede listar/buscar tickets de otros, pero no suplantar al creador.
+        if tool_name == "crear_ticket" or role != "admin":
+            arguments["created_by"] = user_id
+        elif not arguments.get("created_by"):
+            arguments["created_by"] = user_id
 
     try:
         result = tool.invoke(arguments) if hasattr(tool, "invoke") else tool(**arguments)

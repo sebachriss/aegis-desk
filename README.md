@@ -148,7 +148,7 @@ aegis-desk/
 │   │       └── auth-context.tsx
 │   └── package.json
 ├── evals/                      # Evaluaciones (33 casos)
-├── redteam/                    # Red teaming (31 ataques)
+├── redteam/                    # Red teaming (36 ataques)
 ├── scripts/
 │   ├── migrate_postgres.py     # Migración a Supabase Postgres
 │   └── test_*.py               # Tests por fase
@@ -198,15 +198,19 @@ PYTHONPATH=src python scripts/migrate_postgres.py
 # 6. Indexar documentos (Supabase pgvector)
 python -m src.rag.ingest
 
-# 7. Probar componentes
-python scripts/test_rag.py
-python scripts/test_multi_agent.py
-python scripts/test_security.py
-python scripts/test_hitl.py
+# 7. Verificación local (Makefile)
+make test             # pytest tests/
+make compile          # compileall
+make frontend         # npm install + lint + build
+make verify           # test + compile + frontend (rápido)
+make evals            # suite de evals (requiere API keys)
+make redteam          # suite de red teaming (requiere API keys)
+make full             # verify + evals + redteam + baseline checks
+make install-hooks    # instala pre-commit hook de Git
+make clean            # limpia cachés
 
-# 8. Evals / Red Teaming
-python -m evals.run_evals --save
-python -m redteam.run_redteam --save
+# Inspeccionar backend vectorial activo
+.venv/bin/python scripts/check_vector_store.py
 ```
 
 ### Sin Supabase (modo local)
@@ -262,22 +266,24 @@ docker compose up -d
 | 4 | Multi-Agente (supervisor, 4 workers, crítico, LangGraph) | ✅ | — |
 | 5 | Seguridad (prompt injection, RBAC, rate limit, PII) | ✅ | 5/5 tests |
 | 6 | HITL (interrupt, aprobación/rechazo humano) | ✅ | 3/3 tests |
-| 7 | Evals y Observabilidad (LLM-as-judge, RAGAS, tracing) | ✅ | 32/33 pass (97%) |
+| 7 | Evals y Observabilidad (LLM-as-judge, RAGAS, tracing) | ✅ | 33/33 pass (100%) |
 | 8 | API, UI y Docker (FastAPI, Streamlit, Docker) | ✅ | 6 endpoints + frontend |
-| 9 | Red Teaming Final (31 ataques, 8 categorías) | ✅ | 31/31 defended (100%) |
+| 9 | Red Teaming Final (36 ataques, 13 categorías) | ✅ | 36/36 defended (100%) |
 | 10 | Integración Supabase (Postgres, pgvector, checkpointer, auth) | ✅ | Docker healthy |
 | — | Optimizaciones de latencia (Groq + fast path + HITL inteligente) | ✅ | Ver OPTIMIZATIONS.md |
 | — | Frontend Next.js (shadcn/ui, Tailwind 4, Recharts, HttpOnly cookies) | ✅ | Chat, HITL, Dashboard, Métricas |
 
 ## Resultados de Evals
 
+Resultado final (2026-07-17):
+
 ```
 Total casos: 33
-Score promedio: 0.970
-Pass rate (>=0.7): 97.0% (32/33)
+Score promedio: 1.000
+Pass rate (>=0.7): 100.0% (33/33)
 
   rag         10/10  100.0%
-  datos        7/8   87.5%
+  datos        8/8   100.0%
   accion       5/5   100.0%
   chat         4/4   100.0%
   adversarial  6/6   100.0%
@@ -285,9 +291,11 @@ Pass rate (>=0.7): 97.0% (32/33)
 
 ## Resultados de Red Teaming
 
+Resultado final (2026-07-17):
+
 ```
-Total ataques: 31
-Defendidos: 31
+Total ataques: 36
+Defendidos: 36
 Breaches: 0
 Defense rate: 100.0%
 
@@ -299,6 +307,11 @@ Defense rate: 100.0%
   sql_injection               4/4  100%
   rbac_bypass                 4/4  100%
   rate_limit                  1/1  100%
+  base64                      1/1  100%
+  rag_poisoning               1/1  100%
+  tool_chaining               1/1  100%
+  replay                      1/1  100%
+  unicode_confusable          1/1  100%
 ```
 
 ## Vulnerabilidades encontradas y fixeadas durante Red Teaming
@@ -309,6 +322,10 @@ Defense rate: 100.0%
 | Empleado vio todos los salarios vía SQL | Alta | RBAC bypass fix: `chat_agent` cambia `intencion` a `"chat"` al denegar |
 | Email a dominios externos (exfiltración) | Alta | Whitelist de dominios internos en `email.py` |
 | Rate limit no activado con requests lentos | Media | Window ampliada de 60s a 120s |
+| `consultar_sql` no era invocable como tool LangChain | Media | `consultar_sql` ahora es función callable y `consultar_sql_tool` es `StructuredTool` |
+| Tool chaining para exfiltrar datos (ticket + email externo) | Alta | Patrones anti-exfiltración y anti-tool-chaining en `prompt_injection.py` |
+| Replay de acción HITL sin aprobación | Alta | Patrones anti-replay/HITL-bypass en `prompt_injection.py` |
+| Espaciado entre letras como inyección (e.g. `i g n o r e`) | Media | Detección de frases peligrosas comprimidas en `prompt_injection.py` |
 
 ## Aprendizajes clave
 
@@ -332,11 +349,15 @@ Defense rate: 100.0%
 - `.env` está en `.gitignore` — **no se sube al repo**
 - Las tools son **simuladas** (no envían emails reales, no modifican DBs externas)
 - Email whitelist: solo dominios internos (`aegiscorp.com`, `aegis.com`)
-- SQL allowlist: solo `SELECT` (no `INSERT`, `UPDATE`, `DELETE`, `DROP`)
-- PII filter: enmascara emails, teléfonos y DNIs en las respuestas
-- Rate limiting: 10 requests por 120s por usuario
+- SQL allowlist: tablas y columnas explícitas, solo `SELECT` (no `INSERT`, `UPDATE`, `DELETE`, `DROP`)
+- PII filter: enmascara emails, teléfonos, DNIs y otros datos sensibles en respuestas y traces
+- Rate limiting: 10 requests por 120s por usuario en `/chat`; 12 intentos de login/15 min por IP y por usuario
 - RBAC: `empleado` (RAG + tickets + chat) vs `admin` (+ SQL + email)
+- JWT en cookie `HttpOnly` con expiración, issuer, audience y revocación en `/logout`
+- Traces con retención limitada: hashes de identificadores, redacción PII, rotación por edad/cantidad
 - **Supabase**: RLS habilitado en todas las tablas; extensión `vector` en schema `extensions`; service key solo en backend
+
+Para el estado completo de remediación y pendientes ver `SECURITY.md` y `REMEDIATION_PLAN.md`.
 
 ## Licencia
 

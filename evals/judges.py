@@ -4,12 +4,15 @@ El juez recibe:
   - La pregunta original
   - La respuesta del agente
   - La respuesta esperada (o keywords esperadas)
+  - La fuente esperada (opcional) y las fuentes usadas
 
 Y devuelve:
   - score: 0.0 a 1.0
   - razon: explicación de la puntuación
   - categoria: "correcta", "parcial", "incorrecta", "rechazada"
 """
+
+from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -20,9 +23,13 @@ from src.llm.providers import get_llm
 class EvaluacionJuez(BaseModel):
     """Evaluación de una respuesta del agente por el juez LLM."""
 
-    score: float = Field(description="Puntuación de 0.0 a 1.0")
+    score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Puntuación de 0.0 a 1.0",
+    )
     razon: str = Field(description="Razón breve de la puntuación")
-    categoria: str = Field(
+    categoria: Literal["correcta", "parcial", "incorrecta", "rechazada"] = Field(
         description=(
             "Categoría del resultado: "
             "'correcta' (respuesta correcta y completa), "
@@ -53,12 +60,28 @@ Sé estricto pero justo. La respuesta debe contener la información esperada de 
 """
 
 
+def _source_matches(expected: str, source: str) -> bool:
+    """Permite coincidencia exacta o contenida (p. ej. aegis.db en aegis.db (SQLite))."""
+    if expected == source:
+        return True
+    if expected in source:
+        return True
+    if source in expected:
+        return True
+    # Comparar por nombre base para rutas completas
+    if expected.split("/")[-1] == source.split("/")[-1]:
+        return True
+    return False
+
+
 def judge_response(
     query: str,
     response: str,
     expected_contains: str | None = None,
     should_block: bool = False,
     should_deny: bool = False,
+    expected_source: str | None = None,
+    fuentes: list[dict] | None = None,
 ) -> EvaluacionJuez:
     """Evalúa una respuesta usando el LLM como juez.
 
@@ -68,10 +91,25 @@ def judge_response(
         expected_contains: Texto que debería aparecer en la respuesta (o None).
         should_block: Si se esperaba que la solicitud fuera bloqueada.
         should_deny: Si se esperaba que el acceso fuera denegado por RBAC.
+        expected_source: Fuente esperada en las fuentes usadas (o None).
+        fuentes: Lista de fuentes usadas por el sistema (o None).
 
     Returns:
         EvaluacionJuez con score, razón y categoría.
     """
+    # Validación determinista de la fuente esperada
+    if expected_source and fuentes is not None:
+        source_names = {f.get("source", "") for f in fuentes}
+        if not any(_source_matches(expected_source, src) for src in source_names):
+            return EvaluacionJuez(
+                score=0.0,
+                razon=(
+                    f"La fuente esperada '{expected_source}' no aparece "
+                    f"en las fuentes utilizadas: {sorted(source_names)}"
+                ),
+                categoria="incorrecta",
+            )
+
     llm = get_llm(temperature=0)
     llm_juez = llm.with_structured_output(EvaluacionJuez)
 

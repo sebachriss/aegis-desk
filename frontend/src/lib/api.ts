@@ -1,6 +1,13 @@
 // API client for Aegis Desk backend.
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const AUTH_ERROR_EVENT = "aegis-unauthorized";
+
+function emitUnauthorized() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(AUTH_ERROR_EVENT));
+  }
+}
 
 export interface User {
   username: string;
@@ -76,6 +83,10 @@ export async function getMe(): Promise<User> {
     headers: authHeaders(),
     credentials: "include",
   });
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("No autenticado");
+  }
   if (!res.ok) throw new Error("No autenticado");
   return res.json();
 }
@@ -87,7 +98,14 @@ export async function sendChat(query: string): Promise<ChatResponse> {
     body: JSON.stringify({ query }),
     credentials: "include",
   });
-  if (res.status === 401) throw new Error("Sesión expirada");
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("Sesión expirada");
+  }
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("retry-after") || res.headers.get("Retry-After");
+    throw new Error(`Rate limit. Intenta en ${retryAfter || "unos segundos"}s.`);
+  }
   if (!res.ok) throw new Error("Error en el chat");
   return res.json();
 }
@@ -97,6 +115,10 @@ export async function getHitlPending(): Promise<PendingItem[]> {
     headers: authHeaders(),
     credentials: "include",
   });
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("Sesión expirada");
+  }
   if (res.status === 403) throw new Error("No tienes permisos de admin");
   if (!res.ok) throw new Error("Error al obtener pendientes");
   return res.json();
@@ -107,6 +129,10 @@ export async function approveHitl(threadId: string): Promise<{ thread_id: string
     method: "POST",
     credentials: "include",
   });
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("Sesión expirada");
+  }
   if (res.status === 403) throw new Error("No tienes permisos de admin");
   if (!res.ok) throw new Error("Error al aprobar");
   return res.json();
@@ -117,6 +143,10 @@ export async function rejectHitl(threadId: string): Promise<{ thread_id: string;
     method: "POST",
     credentials: "include",
   });
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("Sesión expirada");
+  }
   if (res.status === 403) throw new Error("No tienes permisos de admin");
   if (!res.ok) throw new Error("Error al rechazar");
   return res.json();
@@ -127,6 +157,10 @@ export async function getStats(): Promise<Stats> {
     headers: authHeaders(),
     credentials: "include",
   });
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("Sesión expirada");
+  }
   if (!res.ok) throw new Error("Error al obtener stats");
   return res.json();
 }

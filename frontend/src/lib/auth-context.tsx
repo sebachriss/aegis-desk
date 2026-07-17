@@ -26,13 +26,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) setUser(u);
       })
       .catch(() => {
-        if (!cancelled) setUser(null);
+        if (!cancelled) {
+          setUser(null);
+          router.push("/login");
+        }
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [router]);
+
+  // Cerrar sesión automáticamente si alguna API devuelve 401
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleUnauthorized = () => {
+      setUser(null);
+      router.push("/login");
+    };
+    window.addEventListener("aegis-unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("aegis-unauthorized", handleUnauthorized);
+  }, [router]);
 
   const login = async (username: string, password: string) => {
     const res = await apiLogin(username, password);

@@ -16,8 +16,31 @@ import hmac
 import hashlib
 import base64
 import json
+import threading
+import uuid
 
 from src.config import get_settings
+
+
+# Lista de tokens revocados en memoria (jti -> exp timestamp)
+# En producción se debería reemplazar por Redis o base de datos compartida.
+_revoked_tokens: dict[str, float] = {}
+_revoked_lock = threading.Lock()
+
+
+def _cleanup_revoked_tokens() -> None:
+    """Elimina de la blacklist los tokens cuya expiración ya pasó."""
+    now = time.time()
+    expired = [jti for jti, exp in _revoked_tokens.items() if exp < now]
+    for jti in expired:
+        del _revoked_tokens[jti]
+
+
+def _is_revoked(jti: str) -> bool:
+    """Devuelve True si el token fue revocado y no ha expirado aún."""
+    with _revoked_lock:
+        _cleanup_revoked_tokens()
+        return jti in _revoked_tokens
 
 
 def _get_jwt_secret() -> str:
@@ -88,6 +111,7 @@ def create_access_token(user: dict, expires_in_seconds: int = 3600) -> str:
         "sub": user["username"],
         "role": user["role"],
         "name": user["display_name"],
+        "jti": str(uuid.uuid4()),
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
         "iat": now,
@@ -138,7 +162,30 @@ def verify_token(token: str) -> dict | None:
     if payload.get("aud") != settings.jwt_audience:
         return None
 
+    # Verificar que el token no haya sido revocado
+    jti = payload.get("jti")
+    if jti and _is_revoked(jti):
+        return None
+
     return payload
+
+
+def revoke_token(token: str) -> bool:
+    """Revoca un token JWT añadiendo su jti a la blacklist.
+
+    El token debe ser válido y no expirado para ser revocado.
+    """
+    payload = verify_token(token)
+    if not payload:
+        return False
+
+    jti = payload.get("jti")
+    if not jti:
+        return False
+
+    with _revoked_lock:
+        _revoked_tokens[jti] = payload.get("exp", 0)
+    return True
 
 
 def get_current_user(token: str) -> dict | None:

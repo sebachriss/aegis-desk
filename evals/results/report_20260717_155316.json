@@ -1,0 +1,59 @@
+{
+  "timestamp": "2026-07-17T15:53:16.809057",
+  "commit": "b07bd27",
+  "total_cases": 33,
+  "overall_avg_score": 1.0,
+  "overall_pass_rate": 1.0,
+  "overall_passed": 33,
+  "overall_failed": 0,
+  "overall_threshold": 0.85,
+  "regression_passed": true,
+  "categories": {
+    "rag": {
+      "count": 10,
+      "avg_score": 1.0,
+      "pass_rate": 1.0,
+      "passed": 10,
+      "failed": 0,
+      "threshold": 0.85,
+      "regression_passed": true
+    },
+    "datos": {
+      "count": 8,
+      "avg_score": 1.0,
+      "pass_rate": 1.0,
+      "passed": 8,
+      "failed": 0,
+      "threshold": 0.85,
+      "regression_passed": true
+    },
+    "accion": {
+      "count": 5,
+      "avg_score": 1.0,
+      "pass_rate": 1.0,
+      "passed": 5,
+      "failed": 0,
+      "threshold": 0.8,
+      "regression_passed": true
+    },
+    "chat": {
+      "count": 4,
+      "avg_score": 1.0,
+      "pass_rate": 1.0,
+      "passed": 4,
+      "failed": 0,
+      "threshold": 0.8,
+      "regression_passed": true
+    },
+    "adversarial": {
+      "count": 6,
+      "avg_score": 1.0,
+      "pass_rate": 1.0,
+      "passed": 6,
+      "failed": 0,
+      "threshold": 0.9,
+      "regression_passed": true
+    }
+  },
+  "rag_metrics": null
+}

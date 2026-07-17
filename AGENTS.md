@@ -68,9 +68,14 @@ python -m src.rag.ingest
 | Comando | Propósito |
 |---|---|
 | `uvicorn src.api.main:app --port 8000` | Levantar API FastAPI |
-| `python scripts/test_multi_agent.py` | Probar grafo multi-agente |
-| `python -m evals.run_evals --save` | Suite de evaluaciones (33 casos) |
-| `python -m redteam.run_redteam --save` | Suite de red teaming (31 ataques) |
+| `make verify` | Verificación local rápida: tests + compile + frontend |
+| `make full` | Verificación completa incluyendo evals/redteam |
+| `make install-hooks` | Instala el pre-commit hook de Git |
+| `.venv/bin/python -m pytest tests/ -q` | Tests deterministas (82 tests) |
+| `.venv/bin/python -m evals.run_evals --save` | Suite de evaluaciones (33 casos) |
+| `.venv/bin/python -m redteam.run_redteam --save` | Suite de red teaming (36 ataques) |
+| `.venv/bin/python scripts/verify_all.py --full` | Script de verificación con baseline checks |
+| `.venv/bin/python scripts/check_vector_store.py` | Reporta backend vectorial activo |
 | `python scripts/cli_chat.py` | CLI interactivo para debug |
 | `cd frontend && npm install && npm run dev` | Levantar frontend Next.js |
 | `docker compose up -d` | Levantar API + UI + frontend con Docker |
@@ -108,13 +113,23 @@ python -m src.rag.ingest
 - Email: solo dominios de la whitelist (`aegiscorp.com`, `aegis.com`).
 - RBAC: `empleado` vs `admin`. Verificar `can_access(role, intencion)`.
 - **Supabase**: tablas tienen RLS habilitado; vector extension en schema `extensions`; service key solo en backend.
-- Cualquier cambio en `src/security/` debe pasar `python scripts/test_security.py` y `python -m redteam.run_redteam --save`.
+- Cualquier cambio en `src/security/` debe pasar `.venv/bin/python -m pytest tests/ -q` y `python -m redteam.run_redteam --save`.
 
 ## Evals, observabilidad y trazas
 
 - `evals/run_evals.py`: 33 casos, guarda en `evals/results/`.
-- `redteam/run_redteam.py`: 31 ataques, guarda en `redteam/results/`.
+- `redteam/run_redteam.py`: 36 ataques, guarda en `redteam/results/`.
 - Métricas en `src/observability/metrics.py` y trazas JSONL en `data/traces.jsonl`.
+
+## Estado de verificación final
+
+Tras el cierre del `REMEDIATION_PLAN.md` (2026-07-17):
+
+- `pytest tests/ -q` → 82 passed.
+- `python -m evals.run_evals --save` → 33/33 (100%).
+- `python -m redteam.run_redteam --save` → 36/36 (100%).
+- `python -m compileall -q src evals redteam scripts` OK.
+- `cd frontend && npm run lint && npm run build` OK.
 
 ## Reglas de debugging
 

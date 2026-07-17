@@ -14,6 +14,7 @@ Uso:
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 import uuid
@@ -32,6 +33,94 @@ from src.security.rate_limiter import reset_user
 
 DATASET_PATH = Path(__file__).parent / "datasets" / "test_cases.json"
 RESULTS_DIR = Path(__file__).parent / "results"
+
+
+def _get_git_commit() -> str:
+    """Devuelve el hash corto del commit actual o 'unknown'."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent.parent,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def _reset_database_for_evals():
+    """Asegura una base de datos limpia para los evals.
+
+    Si `DATABASE_URL` está configurado, trunca las tablas SQL y reinserta los
+    datos de ejemplo. En caso contrario, borra y recrea SQLite.
+    """
+    from src.config import get_settings
+
+    settings = get_settings()
+    if settings.database_url:
+        from src.db.postgres_utils import get_postgres_connection
+
+        with get_postgres_connection() as conn:
+            with conn.cursor() as cur:
+                # Reiniciar tablas de datos transaccionales (no vector)
+                cur.execute("TRUNCATE empleados, departamentos, tickets, hitl_queue RESTART IDENTITY CASCADE")
+                cur.execute(
+                    """
+                    INSERT INTO departamentos (nombre, presupuesto)
+                    VALUES (%s, %s), (%s, %s), (%s, %s), (%s, %s)
+                    """,
+                    ("IT", 500000, "RRHH", 200000, "Ventas", 800000, "Finanzas", 300000),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO empleados (nombre, email, departamento_id, salario)
+                    VALUES (%s, %s, %s, %s), (%s, %s, %s, %s), (%s, %s, %s, %s),
+                           (%s, %s, %s, %s), (%s, %s, %s, %s), (%s, %s, %s, %s)
+                    """,
+                    (
+                        "Ana Garcia", "ana@aegiscorp.com", 1, 75000,
+                        "Luis Perez", "luis@aegiscorp.com", 1, 68000,
+                        "Maria Lopez", "maria@aegiscorp.com", 2, 60000,
+                        "Carlos Ruiz", "carlos@aegiscorp.com", 3, 85000,
+                        "Elena Diaz", "elena@aegiscorp.com", 3, 72000,
+                        "Javier Torres", "javier@aegiscorp.com", 4, 90000,
+                    ),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO tickets (titulo, prioridad, estado, empleado_id, created_by, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s),
+                           (%s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        "VPN no conecta", "media", "abierto", 1, "system", "2026-07-16T00:00:00",
+                        "Laptop lenta", "baja", "abierto", 2, "system", "2026-07-16T00:00:00",
+                        "Email no llega", "alta", "cerrado", 1, "system", "2026-07-16T00:00:00",
+                        "Solicitud de monitor", "baja", "abierto", 3, "system", "2026-07-16T00:00:00",
+                    ),
+                )
+            conn.commit()
+        return
+
+    # Fallback SQLite: borrar archivo y recrear
+    from src.tools.sql import DB_PATH, _init_db
+
+    if DB_PATH.exists():
+        DB_PATH.unlink()
+    _init_db()
+
+
+# Umbrales de regresión por categoría (pass rate >= threshold)
+CATEGORY_THRESHOLDS = {
+    "rag": 0.85,
+    "datos": 0.85,
+    "accion": 0.80,
+    "chat": 0.80,
+    "adversarial": 0.90,
+}
+OVERALL_THRESHOLD = 0.85
 
 
 def load_test_cases(category: str | None = None) -> dict[str, list[dict]]:
@@ -65,6 +154,7 @@ def run_single_case(graph, case: dict) -> dict:
     query = case["query"]
     role = case.get("role", "empleado")
     expected = case.get("expected_answer_contains")
+    expected_source = case.get("expected_source")
     should_block = case.get("should_block", False)
     should_deny = case.get("should_deny", False)
 
@@ -108,6 +198,8 @@ def run_single_case(graph, case: dict) -> dict:
         expected_contains=expected,
         should_block=should_block,
         should_deny=should_deny,
+        expected_source=expected_source,
+        fuentes=fuentes,
     )
 
     # Para casos RAG, evaluar también con métricas RAG
@@ -131,6 +223,7 @@ def run_single_case(graph, case: dict) -> dict:
         "rag_metrics": rag_metrics,
         "elapsed_seconds": round(elapsed, 2),
         "expected_contains": expected,
+        "expected_source": expected_source,
         "should_block": should_block,
         "should_deny": should_deny,
     }
@@ -157,10 +250,7 @@ def run_evals(category: str | None = None, save: bool = False) -> dict:
     print(f"  Categorías: {', '.join(cases_by_category.keys())}")
 
     # Resetear base de datos para resultados deterministas
-    from src.tools.sql import DB_PATH, _init_db
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    _init_db()
+    _reset_database_for_evals()
     print("\n  Base de datos reiniciada para evals.")
 
     # Construir grafo con checkpointer (para HITL auto-aprobar)
@@ -222,6 +312,7 @@ def run_evals(category: str | None = None, save: bool = False) -> dict:
 
 def generate_report(results: list[dict], cases_by_category: dict) -> dict:
     """Genera un reporte agregado a partir de los resultados."""
+    commit = _get_git_commit()
     categories = {}
     all_scores = []
 
@@ -246,10 +337,14 @@ def generate_report(results: list[dict], cases_by_category: dict) -> dict:
     for cat, data in categories.items():
         data["avg_score"] = sum(data["scores"]) / len(data["scores"]) if data["scores"] else 0
         data["pass_rate"] = data["passed"] / data["count"] if data["count"] else 0
+        threshold = CATEGORY_THRESHOLDS.get(cat, OVERALL_THRESHOLD)
+        data["threshold"] = threshold
+        data["regression_passed"] = data["pass_rate"] >= threshold
 
     overall_avg = sum(all_scores) / len(all_scores) if all_scores else 0
     overall_pass = sum(1 for s in all_scores if s >= 0.7)
     overall_pass_rate = overall_pass / len(all_scores) if all_scores else 0
+    overall_regression_passed = overall_pass_rate >= OVERALL_THRESHOLD
 
     # Métricas RAG agregadas (si hay)
     rag_scores = []
@@ -267,19 +362,27 @@ def generate_report(results: list[dict], cases_by_category: dict) -> dict:
             "count": len(rag_scores),
         }
 
+    any_regression = any(not data["regression_passed"] for data in categories.values())
+    regression_passed = overall_regression_passed and not any_regression
+
     return {
         "timestamp": datetime.now().isoformat(),
+        "commit": commit,
         "total_cases": len(results),
         "overall_avg_score": round(overall_avg, 3),
         "overall_pass_rate": round(overall_pass_rate, 3),
         "overall_passed": overall_pass,
         "overall_failed": len(all_scores) - overall_pass,
+        "overall_threshold": OVERALL_THRESHOLD,
+        "regression_passed": regression_passed,
         "categories": {cat: {
             "count": data["count"],
             "avg_score": round(data["avg_score"], 3),
             "pass_rate": round(data["pass_rate"], 3),
             "passed": data["passed"],
             "failed": data["failed"],
+            "threshold": data["threshold"],
+            "regression_passed": data["regression_passed"],
         } for cat, data in categories.items()},
         "rag_metrics": rag_summary,
     }
@@ -292,16 +395,18 @@ def print_report(report: dict) -> None:
     print(f"{'=' * 60}")
 
     print(f"\n  Total casos: {report['total_cases']}")
+    print(f"  Commit: {report.get('commit', 'unknown')}")
     print(f"  Score promedio: {report['overall_avg_score']:.3f}")
     print(f"  Pass rate (>=0.7): {report['overall_pass_rate']:.1%} ({report['overall_passed']}/{report['total_cases']})")
 
     print(f"\n  Por categoría:")
-    print(f"  {'Categoría':<15} {'Casos':>6} {'Avg':>8} {'Pass':>8} {'Pass%':>8}")
-    print(f"  {'-'*15} {'-'*6} {'-'*8} {'-'*8} {'-'*8}")
+    print(f"  {'Categoría':<15} {'Casos':>6} {'Avg':>8} {'Pass':>8} {'Pass%':>8} {'Thr':>8} {'OK?':>4}")
+    print(f"  {'-'*15} {'-'*6} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*4}")
 
     for cat, data in report["categories"].items():
         pass_str = f"{data['passed']}/{data['count']}"
-        print(f"  {cat:<15} {data['count']:>6} {data['avg_score']:>8.3f} {pass_str:>8} {data['pass_rate']:>7.1%}")
+        ok = "✅" if data.get("regression_passed", True) else "❌"
+        print(f"  {cat:<15} {data['count']:>6} {data['avg_score']:>8.3f} {pass_str:>8} {data['pass_rate']:>7.1%} {data['threshold']:>7.0%} {ok:>4}")
 
     if report.get("rag_metrics"):
         rag = report["rag_metrics"]
@@ -311,12 +416,11 @@ def print_report(report: dict) -> None:
         print(f"    Context precision: {rag['avg_context_precision']:.3f}")
 
     # Veredicto
-    if report["overall_pass_rate"] >= 0.9:
-        print(f"\n  ✅ SUITE APROBADA (pass rate >= 90%)")
-    elif report["overall_pass_rate"] >= 0.7:
-        print(f"\n  ⚠️  SUITE APROBADA CON OBSERVACIONES (pass rate >= 70%)")
+    regression_passed = report.get("regression_passed", True)
+    if regression_passed:
+        print(f"\n  ✅ SUITE APROBADA (pass rate >= {report['overall_threshold']:.0%})")
     else:
-        print(f"\n  ❌ SUITE REPROBADA (pass rate < 70%) — revisar fallos")
+        print(f"\n  ❌ REGRESIÓN DETECTADA (por debajo del threshold) — revisar fallos")
 
     print(f"\n{'=' * 60}")
 

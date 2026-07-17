@@ -14,6 +14,7 @@ Auth: JWT token en header Authorization: Bearer <token>
 HITL usa SqliteSaver como checkpointer y una cola persistente en SQLite.
 """
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -29,7 +30,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from src.agents.graph import build_graph
-from src.auth.jwt_handler import create_access_token, get_current_user, verify_token
+from src.auth.jwt_handler import create_access_token, get_current_user, revoke_token, verify_token
 from src.auth.users import authenticate, get_user
 from src.config import get_settings
 from src.db import hitl_queue as hitl_db
@@ -89,6 +90,8 @@ app = FastAPI(
 cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 if settings.environment == "production" and (not cors_origins or cors_origins == ["*"]):
     raise RuntimeError("CORS_ORIGINS es obligatorio en produccion y no puede ser '*'")
+if settings.environment == "production" and "demo" in settings.jwt_secret.lower():
+    raise RuntimeError("JWT_SECRET no puede contener 'demo' en produccion")
 if not cors_origins or cors_origins == ["*"]:
     cors_origins = [
         "http://localhost:3000",
@@ -107,11 +110,23 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def add_correlation_id(request: Request, call_next):
+    """Añade un correlation ID a cada request para trazabilidad."""
+    correlation_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    request.state.correlation_id = correlation_id
+    response = await call_next(request)
+    if "x-request-id" not in response.headers:
+        response.headers["x-request-id"] = correlation_id
+    return response
+
+
 def _validate_hitl_thread(thread_id: str):
-    """Valida que un thread este pausado en HITL con una accion pendiente.
+    """Valida que un thread este pausado en HITL con una accion pendiente y no expirada.
 
     Lanza HTTPException 404 si no existe o no esta en HITL,
-    409 si no hay una accion con approval_status == "pending".
+    409 si no hay una accion pendiente,
+    410 si la aprobacion expiro.
     """
     config = {"configurable": {"thread_id": thread_id}}
     try:
@@ -130,6 +145,16 @@ def _validate_hitl_thread(thread_id: str):
         raise HTTPException(
             status_code=409, detail="No hay una accion pendiente de aprobacion en este thread"
         )
+
+    # Verificar expiración del HITL
+    from src.agents.hitl_node import _is_action_expired
+    if _is_action_expired(action_plan):
+        hitl_db.update_status(thread_id, "expired")
+        raise HTTPException(status_code=410, detail="La aprobacion de esta accion expiro")
+
+    queue_status = hitl_db.get_status(thread_id)
+    if queue_status == "expired":
+        raise HTTPException(status_code=410, detail="La aprobacion de esta accion expiro")
 
 
 # --- Schemas ---
@@ -213,9 +238,13 @@ async def require_admin(user: dict = Depends(get_auth_user)) -> dict:
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Evita fugas de detalles internos en respuestas de error."""
+    if exc.status_code >= 500:
+        detail = "Error interno del servidor"
+    else:
+        detail = exc.detail
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content={"detail": detail},
         headers=exc.headers if exc.headers else None,
     )
 
@@ -298,7 +327,7 @@ async def login(req: LoginRequest, request: Request, response: Response):
     No revela si el usuario existe.
     """
     client_ip = request.client.host if request.client else "unknown"
-    rate = check_login_rate_limit(client_ip)
+    rate = check_login_rate_limit(client_ip, req.username)
     if not rate["allowed"]:
         raise HTTPException(
             status_code=429,
@@ -329,8 +358,21 @@ async def login(req: LoginRequest, request: Request, response: Response):
 
 
 @app.post("/logout")
-async def logout(response: Response):
-    """Cierra la sesion eliminando la cookie access_token."""
+async def logout(
+    response: Response,
+    access_token: str | None = Cookie(default=None),
+    authorization: str | None = Header(default=None),
+):
+    """Cierra la sesión eliminando la cookie y revocando el token."""
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1]
+    elif access_token:
+        token = access_token
+
+    if token:
+        revoke_token(token)
+
     response.delete_cookie(key="access_token", path="/")
     return {"ok": True}
 
@@ -342,12 +384,15 @@ async def me(user: dict = Depends(get_auth_user)):
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, user: dict = Depends(get_auth_user)):
+async def chat(req: ChatRequest, user: dict = Depends(get_auth_user), request: Request = None):
     """Envia un mensaje al agente y devuelve la respuesta.
 
     Requiere autenticacion JWT. El rol se extrae del token, no del request.
     Si el grafo se pausa en HITL, devuelve requires_hitl=True
     y el thread_id para aprobar/rechazar despues.
+
+    La invocacion al grafo se ejecuta en un threadpool con timeout para no
+    bloquear el event loop de FastAPI.
     """
     user_id = user["username"]
     role = user["role"]
@@ -359,25 +404,86 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user)):
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
+    def _run_graph():
+        return _graph.invoke({
+            "messages": [],
+            "query": req.query,
+            "user_id": user_id,
+            "role": role,
+            "intencion": "",
+            "respuesta": "",
+            "fuentes": [],
+            "confidence": 0.0,
+            "requires_human_review": False,
+            "retries": 0,
+            "action_retries": 0,
+            "tool_name": None,
+            "authorization_decision": None,
+            "action_plan": None,
+            "approved_by": None,
+            "approved_at": None,
+        }, config=config)
+
     start = time.time()
-    result = _graph.invoke({
-        "messages": [],
-        "query": req.query,
-        "user_id": user_id,
-        "role": role,
-        "intencion": "",
-        "respuesta": "",
-        "fuentes": [],
-        "confidence": 0.0,
-        "requires_human_review": False,
-        "retries": 0,
-        "tool_name": None,
-        "authorization_decision": None,
-        "action_plan": None,
-        "approved_by": None,
-        "approved_at": None,
-    }, config=config)
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_run_graph),
+            timeout=settings.api_chat_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        elapsed = time.time() - start
+        trace_execution(
+            query=req.query,
+            intencion="bloqueado",
+            respuesta="Timeout: la solicitud excedio el tiempo maximo",
+            confidence=0.0,
+            fuentes=[],
+            retries=0,
+            elapsed_seconds=elapsed,
+            user_id=user_id,
+            role=role,
+            tool_name=None,
+            authorization_decision="timeout",
+            action_plan=None,
+            approved_by=None,
+            approved_at=None,
+            correlation_id=getattr(request.state, "correlation_id", None) if request else None,
+        )
+        raise HTTPException(status_code=504, detail="La solicitud excedio el tiempo maximo de espera")
+    except Exception:
+        # No exponer detalles internos ni variables de configuracion
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
     elapsed = time.time() - start
+
+    def _trace(respuesta: str, intencion: str, action_plan=None, auth_decision=None):
+        trace_execution(
+            query=req.query,
+            intencion=intencion,
+            respuesta=respuesta,
+            confidence=result.get("confidence", 0.0),
+            fuentes=result.get("fuentes", []),
+            retries=result.get("retries", 0) + result.get("action_retries", 0),
+            elapsed_seconds=elapsed,
+            user_id=user_id,
+            role=role,
+            tool_name=result.get("tool_name"),
+            authorization_decision=auth_decision or result.get("authorization_decision"),
+            action_plan=action_plan or result.get("action_plan"),
+            approved_by=result.get("approved_by"),
+            approved_at=result.get("approved_at"),
+            retrieval_scores=result.get("retrieval_scores"),
+            discarded=result.get("discarded"),
+            correlation_id=getattr(request.state, "correlation_id", None) if request else None,
+        )
+
+    # Convertir rate limit interno a HTTP 429
+    if result.get("block_reason") == "rate_limit":
+        _trace(result.get("respuesta", "Rate limit"), "bloqueado")
+        raise HTTPException(
+            status_code=429,
+            detail=result.get("respuesta", "Rate limit excedido"),
+            headers={"Retry-After": str(result.get("retry_after", 60))},
+        )
 
     # Verificar si se pauso en HITL
     is_interrupted = bool(result.get("__interrupt__"))
@@ -390,6 +496,11 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user)):
             intencion=result.get("intencion", ""),
             action_plan=result.get("action_plan"),
             user=user,
+        )
+        _trace(
+            "⏸️ HITL pendiente de aprobacion",
+            result.get("intencion", ""),
+            action_plan=result.get("action_plan"),
         )
         return ChatResponse(
             thread_id=thread_id,
@@ -406,22 +517,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user)):
     respuesta_filtrada, _ = filter_pii(raw_respuesta)
 
     # Registrar trace con datos redactados
-    trace_execution(
-        query=req.query,
-        intencion=result.get("intencion", ""),
-        respuesta=respuesta_filtrada[:500],
-        confidence=result.get("confidence", 0.0),
-        fuentes=result.get("fuentes", []),
-        retries=result.get("retries", 0),
-        elapsed_seconds=elapsed,
-        user_id=user_id,
-        role=role,
-        tool_name=result.get("tool_name"),
-        authorization_decision=result.get("authorization_decision"),
-        action_plan=result.get("action_plan"),
-        approved_by=result.get("approved_by"),
-        approved_at=result.get("approved_at"),
-    )
+    _trace(respuesta_filtrada[:500], result.get("intencion", ""))
 
     return ChatResponse(
         thread_id=thread_id,
@@ -452,7 +548,10 @@ async def hitl_approve(thread_id: str, user: dict = Depends(require_admin)):
 
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        result = _graph.invoke(Command(resume="approve"), config=config)
+        result = _graph.invoke(
+            Command(resume={"decision": "approve", "approved_by": user.get("username")}),
+            config=config,
+        )
     except Exception:
         raise HTTPException(status_code=404, detail="Thread no encontrado o ya resuelto")
 
@@ -473,7 +572,10 @@ async def hitl_reject(thread_id: str, user: dict = Depends(require_admin)):
 
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        result = _graph.invoke(Command(resume="reject"), config=config)
+        result = _graph.invoke(
+            Command(resume={"decision": "reject", "approved_by": user.get("username")}),
+            config=config,
+        )
     except Exception:
         raise HTTPException(status_code=404, detail="Thread no encontrado o ya resuelto")
 

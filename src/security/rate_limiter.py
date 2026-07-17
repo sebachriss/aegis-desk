@@ -13,7 +13,8 @@ _ratelimit_lock = threading.Lock()
 
 # {user_id: [timestamp1, timestamp2, ...]}
 _requests: dict[str, list[float]] = defaultdict(list)
-_login_attempts: dict[str, list[float]] = defaultdict(list)
+_login_attempts_ip: dict[str, list[float]] = defaultdict(list)
+_login_attempts_user: dict[str, list[float]] = defaultdict(list)
 
 # Configuracion de chat
 MAX_REQUESTS = 10        # maximo de requests
@@ -78,42 +79,74 @@ def check_rate_limit(user_id: str) -> dict:
         }
 
 
-def check_login_rate_limit(ip_or_username: str) -> dict:
-    """Verifica si una IP/usuario puede intentar login.
+def _is_allowed(store: dict, key: str, max_attempts: int, window: int) -> tuple[bool, list[float]]:
+    """Devuelve si se permite otro intento y la ventana actual limpia."""
+    with _ratelimit_lock:
+        store[key] = _clean_window(store[key], window)
+        return len(store[key]) < max_attempts, store[key]
+
+
+def _record_attempt(store: dict, key: str, now: float) -> None:
+    """Registra un intento (después de verificar ambos límites)."""
+    with _ratelimit_lock:
+        store[key].append(now)
+
+
+def check_login_rate_limit(ip: str, username: str = "") -> dict:
+    """Verifica si una IP y/o usuario pueden intentar login.
+
+    Aplica límites separados por IP y por nombre de usuario. Solo registra
+    el intento si ambos límites permiten continuar.
 
     Args:
-        ip_or_username: IP del cliente o username (para rate limit por usuario).
+        ip: IP del cliente.
+        username: Nombre de usuario (opcional). Se aplica un segundo rate limit.
 
     Returns:
         Diccionario con allowed, reason, attempts_in_window, limit.
     """
     now = time.time()
 
-    with _ratelimit_lock:
-        _login_attempts[ip_or_username] = _clean_window(
-            _login_attempts[ip_or_username], LOGIN_WINDOW_SECONDS
-        )
-        current_count = len(_login_attempts[ip_or_username])
+    ip_allowed, ip_window = _is_allowed(
+        _login_attempts_ip, ip, MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW_SECONDS
+    )
+    if not ip_allowed:
+        retry_after = int(ip_window[0] + LOGIN_WINDOW_SECONDS - now)
+        current_count = len(ip_window)
+        return {
+            "allowed": False,
+            "reason": f"Demasiados intentos de login desde esta IP: {current_count}/{MAX_LOGIN_ATTEMPTS}. Intenta en {retry_after}s.",
+            "attempts_in_window": current_count,
+            "limit": MAX_LOGIN_ATTEMPTS,
+            "retry_after": retry_after,
+        }
 
-        if current_count >= MAX_LOGIN_ATTEMPTS:
-            oldest = _login_attempts[ip_or_username][0]
-            retry_after = int(oldest + LOGIN_WINDOW_SECONDS - now)
+    if username:
+        user_allowed, user_window = _is_allowed(
+            _login_attempts_user, username, MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW_SECONDS
+        )
+        if not user_allowed:
+            retry_after = int(user_window[0] + LOGIN_WINDOW_SECONDS - now)
+            current_count = len(user_window)
             return {
                 "allowed": False,
-                "reason": f"Demasiados intentos de login: {current_count}/{MAX_LOGIN_ATTEMPTS}. Intenta en {retry_after}s.",
+                "reason": f"Demasiados intentos de login para este usuario: {current_count}/{MAX_LOGIN_ATTEMPTS}. Intenta en {retry_after}s.",
                 "attempts_in_window": current_count,
                 "limit": MAX_LOGIN_ATTEMPTS,
                 "retry_after": retry_after,
             }
 
-        _login_attempts[ip_or_username].append(now)
-        return {
-            "allowed": True,
-            "reason": None,
-            "attempts_in_window": current_count + 1,
-            "limit": MAX_LOGIN_ATTEMPTS,
-            "retry_after": 0,
-        }
+    _record_attempt(_login_attempts_ip, ip, now)
+    if username:
+        _record_attempt(_login_attempts_user, username, now)
+
+    return {
+        "allowed": True,
+        "reason": None,
+        "attempts_in_window": len(_login_attempts_ip[ip]),
+        "limit": MAX_LOGIN_ATTEMPTS,
+        "retry_after": 0,
+    }
 
 
 def reset_user(user_id: str) -> None:
@@ -126,4 +159,8 @@ def reset_user(user_id: str) -> None:
 
 def reset_login(ip_or_username: str) -> None:
     """Resetea los intentos de login de una IP o usuario (para tests)."""
-    _login_attempts[ip_or_username] = []
+    with _ratelimit_lock:
+        if ip_or_username in _login_attempts_ip:
+            _login_attempts_ip[ip_or_username] = []
+        if ip_or_username in _login_attempts_user:
+            _login_attempts_user[ip_or_username] = []
