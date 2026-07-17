@@ -4,14 +4,15 @@ Normaliza DATABASE_URL para soportar passwords con caracteres especiales
 (% , @, #, etc.) que de otro modo rompen psycopg/psycopg2.
 """
 
-from urllib.parse import urlparse, quote, urlunparse
+from urllib.parse import urlparse, quote, unquote, urlunparse
 
 
 def normalize_database_url(url: str) -> str:
     """Re-encode userinfo de una DATABASE_URL para que sea valida para libpq."""
     parsed = urlparse(url)
-    user = quote(parsed.username or "", safe="")
-    password = quote(parsed.password or "", safe="")
+    # unquote primero para no doble-encodear passwords que ya vengan escapados
+    user = quote(unquote(parsed.username or ""), safe="")
+    password = quote(unquote(parsed.password or ""), safe="")
     if user and password:
         netloc = f"{user}:{password}@{parsed.hostname}"
     elif user:
