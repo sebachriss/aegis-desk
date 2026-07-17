@@ -60,7 +60,7 @@ def _get_checkpointer():
             from src.db.postgres_utils import get_postgres_connection, get_postgres_pool
 
             # Asegurar tablas del checkpointer (autocommit porque usa CREATE INDEX CONCURRENTLY)
-            with get_postgres_connection() as conn:
+            with get_postgres_connection(connect_timeout=2) as conn:
                 conn.autocommit = True
                 PostgresSaver(conn).setup()
 
@@ -255,7 +255,7 @@ async def health():
     try:
         if settings.database_url:
             from src.db.postgres_utils import get_postgres_connection
-            with get_postgres_connection() as conn:
+            with get_postgres_connection(connect_timeout=1) as conn:
                 conn.execute("SELECT 1")
         else:
             conn = sqlite3.connect(str(CHECKPOINT_DB_PATH), check_same_thread=False)
@@ -265,9 +265,9 @@ async def health():
     except Exception as exc:
         checks["database"] = f"error: {exc}"
 
-    # Cola HITL
+    # Cola HITL (misma DB que database)
     try:
-        checks["hitl_queue"] = hitl_db.health_check()
+        checks["hitl_queue"] = checks["database"]
     except Exception as exc:
         checks["hitl_queue"] = f"error: {exc}"
 

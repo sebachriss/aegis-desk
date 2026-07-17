@@ -216,11 +216,13 @@ def get_pending() -> list[dict]:
     return _with_sqlite(_sqlite_exec)
 
 
-def health_check() -> str:
+def health_check(connect_timeout: int = 3) -> str:
     """Verifica que la cola HITL responde."""
     try:
         if _use_postgres():
-            _with_postgres(lambda conn: conn.execute("SELECT 1"))
+            from src.db.postgres_utils import get_postgres_connection
+            with get_postgres_connection(connect_timeout=connect_timeout) as conn:
+                conn.execute("SELECT 1")
         else:
             _with_sqlite(lambda conn: conn.execute("SELECT 1"))
         return "ok"
