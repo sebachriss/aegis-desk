@@ -11,6 +11,8 @@ Los empleados de Aegis Corp hacen consultas y un equipo de agentes de IA las res
 
 ```
 "¿Cuántos días de vacaciones tengo?"     → RAG Agent busca en documentos (Supabase pgvector)
+"¿Cuál es mi saldo de vacaciones?"         → Action Agent consulta saldo de vacaciones
+"Quiero solicitar vacaciones del 1 al 5"  → Action Agent → HITL aprueba (acción sensible)
 "Crea un ticket de alta prioridad"       → Action Agent crea ticket en Supabase Postgres
 "Envía un email a RRHH"                    → Action Agent → HITL aprueba (acción sensible)
 "¿Cuántos empleados hay en Ventas?"        → Data Agent consulta SQL (solo admin)
@@ -42,7 +44,7 @@ RAG      Data      Action    Chat
                │
       ┌────────┴────────┐
       ▼                 ▼
- Respuesta OK      HITL (solo emails)
+ Respuesta OK      HITL (emails y vacaciones)
  (usuario)         (interrupt → aprobación)
                         │
                    ┌────┴────┐
@@ -106,6 +108,7 @@ aegis-desk/
 │   ├── tools/
 │   │   ├── tickets.py          # @tool: crear/listar/buscar tickets (Postgres)
 │   │   ├── email.py            # @tool: enviar email (simulado, whitelist dominios)
+│   │   ├── vacaciones.py       # @tool: consultar saldo, solicitar y listar vacaciones
 │   │   ├── sql.py              # @tool: SELECT sobre Postgres/SQLite (allowlist)
 │   │   └── registry.py         # Registro central de herramientas
 │   ├── agents/
@@ -147,8 +150,8 @@ aegis-desk/
 │   │       ├── api.ts
 │   │       └── auth-context.tsx
 │   └── package.json
-├── evals/                      # Evaluaciones (33 casos)
-├── redteam/                    # Red teaming (36 ataques)
+├── evals/                      # Evaluaciones (37 casos)
+├── redteam/                    # Red teaming (42 ataques)
 ├── scripts/
 │   ├── migrate_postgres.py     # Migración a Supabase Postgres
 │   └── test_*.py               # Tests por fase

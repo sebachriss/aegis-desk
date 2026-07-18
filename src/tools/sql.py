@@ -12,6 +12,7 @@ Seguridad:
 
 import re
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -22,7 +23,7 @@ from src.config import get_settings
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "aegis.db"
 
 # Tablas permitidas — si no esta aqui, no se puede consultar
-ALLOWED_TABLES = {"empleados", "tickets", "departamentos"}
+ALLOWED_TABLES = {"empleados", "tickets", "departamentos", "vacaciones_saldo", "vacaciones_solicitudes"}
 
 # Columnas sensibles que se redactan por defecto en los resultados
 SENSITIVE_COLUMNS = {"email", "salario"}
@@ -74,6 +75,27 @@ def _init_db():
             created_at TEXT,
             FOREIGN KEY (empleado_id) REFERENCES empleados(id)
         );
+
+        CREATE TABLE IF NOT EXISTS vacaciones_saldo (
+            id INTEGER PRIMARY KEY,
+            empleado_email TEXT UNIQUE,
+            dias_totales INTEGER DEFAULT 22,
+            dias_usados INTEGER DEFAULT 0,
+            anio INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS vacaciones_solicitudes (
+            id INTEGER PRIMARY KEY,
+            solicitante TEXT,
+            fecha_inicio TEXT,
+            fecha_fin TEXT,
+            dias INTEGER,
+            estado TEXT,
+            aprobado_por TEXT,
+            created_at TEXT,
+            motivo TEXT,
+            idempotency_key TEXT
+        );
     """)
 
     # Intentar anadir columnas de migracion si la tabla existe sin ellas
@@ -114,6 +136,21 @@ def _init_db():
                 ("Laptop lenta", "baja", "abierto", 2, "system", "2026-07-16T00:00:00"),
                 ("Email no llega", "alta", "cerrado", 1, "system", "2026-07-16T00:00:00"),
                 ("Solicitud de monitor", "baja", "abierto", 3, "system", "2026-07-16T00:00:00"),
+            ],
+        )
+
+    anio_actual = datetime.now().year
+    cursor.execute("SELECT COUNT(*) FROM vacaciones_saldo")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany(
+            "INSERT INTO vacaciones_saldo (empleado_email, dias_totales, dias_usados, anio) VALUES (?, ?, ?, ?)",
+            [
+                ("ana@aegiscorp.com", 22, 0, anio_actual),
+                ("luis@aegiscorp.com", 22, 0, anio_actual),
+                ("maria@aegiscorp.com", 22, 0, anio_actual),
+                ("carlos@aegiscorp.com", 22, 0, anio_actual),
+                ("elena@aegiscorp.com", 22, 0, anio_actual),
+                ("javier@aegiscorp.com", 22, 0, anio_actual),
             ],
         )
 

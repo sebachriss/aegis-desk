@@ -65,7 +65,7 @@ def _reset_database_for_evals():
         with get_postgres_connection() as conn:
             with conn.cursor() as cur:
                 # Reiniciar tablas de datos transaccionales (no vector)
-                cur.execute("TRUNCATE empleados, departamentos, tickets, hitl_queue RESTART IDENTITY CASCADE")
+                cur.execute("TRUNCATE empleados, departamentos, tickets, hitl_queue, vacaciones_saldo, vacaciones_solicitudes RESTART IDENTITY CASCADE")
                 cur.execute(
                     """
                     INSERT INTO departamentos (nombre, presupuesto)
@@ -101,15 +101,45 @@ def _reset_database_for_evals():
                         "Solicitud de monitor", "baja", "abierto", 3, "system", "2026-07-16T00:00:00",
                     ),
                 )
+                anio_actual = datetime.now().year
+                cur.execute(
+                    """
+                    INSERT INTO vacaciones_saldo (empleado_email, dias_totales, dias_usados, anio)
+                    VALUES (%s, %s, %s, %s), (%s, %s, %s, %s), (%s, %s, %s, %s),
+                           (%s, %s, %s, %s), (%s, %s, %s, %s), (%s, %s, %s, %s), (%s, %s, %s, %s)
+                    ON CONFLICT (empleado_email) DO NOTHING
+                    """,
+                    (
+                        "ana@aegiscorp.com", 22, 0, anio_actual,
+                        "luis@aegiscorp.com", 22, 0, anio_actual,
+                        "maria@aegiscorp.com", 22, 0, anio_actual,
+                        "carlos@aegiscorp.com", 22, 0, anio_actual,
+                        "elena@aegiscorp.com", 22, 0, anio_actual,
+                        "javier@aegiscorp.com", 22, 0, anio_actual,
+                        "eval_user", 22, 0, anio_actual,
+                    ),
+                )
             conn.commit()
         return
 
     # Fallback SQLite: borrar archivo y recrear
+    import sqlite3
+
     from src.tools.sql import DB_PATH, _init_db
 
     if DB_PATH.exists():
         DB_PATH.unlink()
     _init_db()
+    anio_actual = datetime.now().year
+    conn_sqlite = sqlite3.connect(str(DB_PATH))
+    try:
+        conn_sqlite.execute(
+            "INSERT OR IGNORE INTO vacaciones_saldo (empleado_email, dias_totales, dias_usados, anio) VALUES (?, ?, ?, ?)",
+            ("eval_user", 22, 0, anio_actual),
+        )
+        conn_sqlite.commit()
+    finally:
+        conn_sqlite.close()
 
 
 # Umbrales de regresión por categoría (pass rate >= threshold)

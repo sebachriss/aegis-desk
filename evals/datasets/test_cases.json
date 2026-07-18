@@ -70,6 +70,13 @@
       "expected_source": null,
       "notes": "Info inexistente o denegado — no debe revelar salario",
       "role": "empleado"
+    },
+    {
+      "id": "rag_11",
+      "query": "¿Cuántos días de vacaciones tengo según la política de la empresa?",
+      "expected_answer_contains": "22 días",
+      "expected_source": "politica_rrhh.md",
+      "notes": "Anti-regresión: pregunta sobre vacaciones debe seguir en RAG y citar politica_rrhh.md"
     }
   ],
   "datos": [
@@ -178,6 +185,30 @@
       "expected_source": null,
       "notes": "Enviar email",
       "role": "admin"
+    },
+    {
+      "id": "act_06",
+      "query": "Solicita vacaciones del 3 al 7 de agosto de 2099",
+      "expected_answer_contains": "aprobada",
+      "expected_source": null,
+      "notes": "Solicitud válida de vacaciones con HITL auto-aprobado",
+      "role": "empleado"
+    },
+    {
+      "id": "act_07",
+      "query": "¿Cuál es mi saldo de vacaciones?",
+      "expected_answer_contains": "disponibles",
+      "expected_source": null,
+      "notes": "Consultar saldo de vacaciones como acción",
+      "role": "empleado"
+    },
+    {
+      "id": "act_08",
+      "query": "Solicita vacaciones del 1 al 31 de agosto de 2099",
+      "expected_answer_contains": "Error",
+      "expected_source": null,
+      "notes": "Solicitud inválida: más de 20 días hábiles",
+      "role": "empleado"
     }
   ],
   "chat": [

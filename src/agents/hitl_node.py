@@ -7,7 +7,7 @@ al action_executor_node. Las acciones rechazadas o con decision invalida
 se marcan como rechazadas y no se ejecutan.
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from langgraph.types import interrupt
@@ -21,7 +21,40 @@ def _redact_sensitive_args(tool_name: str, arguments: dict[str, Any]) -> dict[st
     if tool_name == "enviar_email":
         # Mostrar solo destinatario; ocultar cuerpo y asunto del resumen HITL
         return {k: v for k, v in arguments.items() if k == "para"}
+
+    if tool_name == "solicitar_vacaciones":
+        safe = {}
+        for k in ("fecha_inicio", "fecha_fin"):
+            if k in arguments:
+                safe[k] = arguments[k]
+        # Calcular días hábiles de forma segura; si las fechas son inválidas, marcarlo.
+        try:
+            fi = date.fromisoformat(arguments["fecha_inicio"])
+            ff = date.fromisoformat(arguments["fecha_fin"])
+            safe["dias_habiles"] = _dias_habiles(fi, ff)
+        except Exception:
+            safe["dias_habiles"] = "inválido"
+        if "motivo" in arguments:
+            motivo = str(arguments["motivo"])
+            safe["motivo"] = motivo if len(motivo) <= 80 else motivo[:80] + "..."
+        return safe
+
     return {k: v for k, v in arguments.items() if k not in {"password", "token", "api_key", "secret"}}
+
+
+def _dias_habiles(fi: date, ff: date) -> int:
+    """Cuenta días hábiles (lun-vie) entre dos fechas inclusive."""
+    total = (ff - fi).days + 1
+    if total <= 0:
+        return 0
+    semanas = total // 7
+    extra = total % 7
+    habiles = semanas * 5
+    inicio = fi.weekday()
+    for i in range(extra):
+        if (inicio + i) % 7 < 5:
+            habiles += 1
+    return habiles
 
 
 def _is_action_expired(action_plan: dict) -> bool:

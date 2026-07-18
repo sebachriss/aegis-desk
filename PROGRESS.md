@@ -1,3 +1,25 @@
+## 2026-07-18 — Funcionalidad de vacaciones
+
+**Objetivo:** implementar solicitud y consulta de vacaciones siguiendo el `PLAN_VACACIONES.md`.
+
+- **`src/tools/vacaciones.py`**: tools `consultar_saldo_vacaciones`, `solicitar_vacaciones` y `listar_solicitudes_vacaciones`. Triple backend (Postgres/Supabase/SQLite), validación de fechas, cálculo de días hábiles, descuento atómico de saldo e idempotencia.
+- **Modelo de datos**: tablas `vacaciones_saldo` y `vacaciones_solicitudes` en `src/tools/sql.py`, `scripts/migrate_postgres.py` y seeds con 22 días de saldo para los 6 empleados.
+- **RBAC**: `src/security/rbac.py` añade las 3 tools a `empleado` y `admin`.
+- **Registry**: `src/tools/registry.py` registra las nuevas tools.
+- **Action Agent**: `solicitar_vacaciones` es `high` risk → HITL; inyección de `created_by`, `role`, `idempotency_key` y `aprobado_por`; validación fail-closed de fechas en el planner.
+- **HITL**: `src/agents/hitl_node.py` redacta fechas y motivo, calcula días hábiles para el resumen del revisor.
+- **Supervisor**: fast path para "solicitar vacaciones", "saldo de vacaciones" y "consultar saldo"; la política de vacaciones sigue siendo RAG.
+- **Tests**: `tests/test_vacaciones.py` (23 tests) cubre tools, RBAC, planning, ejecución, replay, HITL, supervisor y determinismo de días hábiles.
+- **Evals**: dataset ampliado a 37 casos (`rag_11`, `act_06`–`act_08`) con casos de vacaciones.
+- **Redteam**: nueva categoría `vacaciones` con 6 ataques (spoofing, bypass HITL, tool chaining, prompt injection en motivo, valores absurdos y exceso de días).
+
+**Verificación:**
+- `make test` → 105 passed (previo 82 + 23 nuevos).
+- `make compile` → OK.
+- `make verify` → OK (tests + compileall + frontend build/lint).
+- `python -m evals.run_evals --save` → 37/37 (100%).
+- `python -m redteam.run_redteam --save` → 42/42 (100%).
+
 ## 2026-07-17 — Proceso, Devin skill, RAG tracing y CI
 
 **Objetivo:** cerrar las mejoras de proceso propuestas y transparentar el backend vectorial.

@@ -56,7 +56,7 @@ def _tool_descriptions(tools: list) -> str:
 
 def _determine_risk_level(tool_name: str) -> str:
     """Asigna nivel de riesgo segun la tool (reglas de negocio)."""
-    high_risk = {"enviar_email"}
+    high_risk = {"enviar_email", "solicitar_vacaciones"}
     medium_risk = {"consultar_sql"}
     if tool_name in high_risk:
         return "high"
@@ -153,6 +153,21 @@ def action_planner_node(state: AgentState) -> dict:
             "action_plan": None,
         }
 
+    # Validación determinista fail-closed para solicitudes de vacaciones.
+    # Si las fechas/motivo no pasan, rechazamos antes de HITL.
+    if tool_name == "solicitar_vacaciones":
+        from src.tools.vacaciones import _validar_solicitud_vacaciones
+        validation_error = _validar_solicitud_vacaciones(plan.arguments)
+        if validation_error:
+            return {
+                "respuesta": f"No puedo procesar la solicitud. {validation_error}",
+                "fuentes": [],
+                "tool_name": tool_name,
+                "authorization_decision": "denied",
+                "confidence": 1.0,
+                "action_plan": None,
+            }
+
     risk_level = _determine_risk_level(tool_name)
     approval_status = "pending" if risk_level == "high" else "not_required"
 
@@ -226,18 +241,31 @@ def action_executor_node(state: AgentState) -> dict:
     tool = TOOLS[tool_name]
     arguments = action_plan.get("arguments", {})
 
-    # Inyectar ownership/auditoria para tickets
-    if tool_name in ("crear_ticket", "listar_tickets", "buscar_ticket"):
+    # Inyectar ownership/auditoria para tickets y vacaciones
+    OWNERSHIP_TOOLS = {
+        "crear_ticket",
+        "listar_tickets",
+        "buscar_ticket",
+        "consultar_saldo_vacaciones",
+        "solicitar_vacaciones",
+        "listar_solicitudes_vacaciones",
+    }
+    if tool_name in OWNERSHIP_TOOLS:
         arguments = dict(arguments)
         user_id = state.get("user_id", "unknown")
         role = state.get("role", "empleado")
         arguments["role"] = role
-        # Siempre registrar quien realmente ejecuta la accion;
-        # el rol admin puede listar/buscar tickets de otros, pero no suplantar al creador.
-        if tool_name == "crear_ticket" or role != "admin":
+        # Para crear/solicitar, siempre inyectar created_by real (evita suplantación).
+        # Para consultar/listar/buscar, el admin puede especificar un target; el resto no.
+        if tool_name in ("crear_ticket", "solicitar_vacaciones") or role != "admin":
             arguments["created_by"] = user_id
         elif not arguments.get("created_by"):
             arguments["created_by"] = user_id
+
+        # Datos de auditoría para solicitudes de vacaciones (post-HITL)
+        if tool_name == "solicitar_vacaciones":
+            arguments["idempotency_key"] = action_plan.get("idempotency_key", "")
+            arguments["aprobado_por"] = action_plan.get("approved_by") or ""
 
     try:
         result = tool.invoke(arguments) if hasattr(tool, "invoke") else tool(**arguments)
@@ -253,8 +281,12 @@ def action_executor_node(state: AgentState) -> dict:
     except Exception as e:
         action_plan["execution_status"] = "failed"
         action_plan["error"] = str(e)
+        msg = str(e)
+        # Si la tool levantó un ValueError con mensaje de negocio, mostrarlo limpio.
+        if not msg.startswith("Error:"):
+            msg = f"Error al ejecutar '{tool_name}': {e}"
         return {
-            "respuesta": f"Error al ejecutar '{tool_name}': {e}",
+            "respuesta": msg,
             "fuentes": [],
             "action_plan": action_plan,
         }

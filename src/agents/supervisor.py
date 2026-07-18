@@ -53,10 +53,20 @@ RAG_PATTERNS = [
 ]
 _compiled_rag = [re.compile(p, re.IGNORECASE) for p in RAG_PATTERNS]
 
-# Palabras que indican una orden de acción explícita (crear, enviar, listar, buscar).
-# Si aparecen junto a tickets/email, la intención es "accion".
-ACTION_VERBS = re.compile(r"\b(crea|crear|envía|enviar|envie|lista|listar|listame|muestra|mostrar|busca|buscar|buscame|manda|mandar)\b", re.IGNORECASE)
-TICKET_EMAIL_NOUNS = re.compile(r"\b(ticket|tickets|email|correo|mail)\b", re.IGNORECASE)
+# Palabras que indican una orden de acción explícita.
+# Si aparecen junto a tickets/email/vacaciones/saldo, la intención es "accion".
+ACTION_VERBS = re.compile(
+    r"\b(crea|crear|envía|enviar|envie|lista|listar|listame|muestra|mostrar|busca|buscar|buscame|manda|mandar|"
+    r"solicita|solicitar|solicitame|pide|pedir|pedirme|reserva|reservar|reservame|consulta|consultar|dame|ver|revisar)\b",
+    re.IGNORECASE,
+)
+ACTION_NOUNS = re.compile(r"\b(ticket|tickets|email|correo|mail|vacaciones|saldo)\b", re.IGNORECASE)
+
+# Patrón adicional para "saldo de vacaciones" sin verbo de acción explícito.
+VACACIONES_SALDO = re.compile(
+    r"\b(saldo\s+(de\s+)?vacaciones|saldo\s+vacaciones|mi\s+saldo|consultar.*saldo|saber.*saldo)\b",
+    re.IGNORECASE,
+)
 
 
 def _is_trivial_chat(query: str) -> bool:
@@ -68,8 +78,8 @@ def _is_trivial_chat(query: str) -> bool:
 
 
 def _is_action_query(query: str) -> bool:
-    """Heurística rápida: detecta órdenes de acción sobre tickets/email."""
-    return ACTION_VERBS.search(query) and TICKET_EMAIL_NOUNS.search(query)
+    """Heurística rápida: detecta órdenes de acción sobre tickets/email/vacaciones."""
+    return (ACTION_VERBS.search(query) and ACTION_NOUNS.search(query)) or VACACIONES_SALDO.search(query)
 
 
 def _is_data_query(query: str) -> bool:
@@ -111,8 +121,8 @@ Tu trabajo es clasificar la intención del mensaje del usuario en una de 4 categ
   Ej: "¿Cuántos empleados hay?", "¿Quién gana más en Ventas?", "¿Cuál es el presupuesto de IT?"
   NOTA: listar tickets o buscar tickets NO es "datos" — es "accion".
 
-- **accion**: El usuario pide explícitamente ejecutar una acción con herramientas: crear ticket, listar tickets, buscar ticket, enviar email.
-  Ej: "Crea un ticket de alta prioridad", "Envía un email a RRHH", "Lista los tickets abiertos", "Busca el ticket 1"
+- **accion**: El usuario pide explícitamente ejecutar una acción con herramientas: crear ticket, listar tickets, buscar ticket, enviar email, consultar saldo de vacaciones, solicitar vacaciones.
+  Ej: "Crea un ticket de alta prioridad", "Envía un email a RRHH", "Lista los tickets abiertos", "Busca el ticket 1", "Quiero solicitar vacaciones del 1 al 5 de agosto", "¿Cuál es mi saldo de vacaciones?"
   Una frase como "Pérdida de laptop" o "Mi laptop no funciona" es una consulta de información (rag) a menos que diga explícitamente "crea un ticket" o "reporta".
 
 - **chat**: Saludos, conversación general, o preguntas que no encajan en las anteriores.
@@ -120,8 +130,9 @@ Tu trabajo es clasificar la intención del mensaje del usuario en una de 4 categ
 
 Reglas clave:
 1. Si la pregunta busca información documentada (políticas, manuales, FAQ, procedimientos), es **rag**.
-2. Si la pregunta menciona "tickets", "email" o pide explícitamente "crea"/"envía"/"lista"/"busca", es **accion**.
-3. Solo es **datos** si pregunta por empleados, departamentos, presupuestos o números de la DB.
+2. Si la pregunta menciona "tickets", "email", "vacaciones", "saldo" o pide explícitamente "crea"/"envía"/"lista"/"busca"/"solicita"/"consulta", es **accion**.
+3. "¿Cuál es la política de vacaciones?" es **rag** (pregunta por normativa). "¿Cuál es mi saldo de vacaciones?" o "Quiero solicitar vacaciones" es **accion**.
+4. Solo es **datos** si pregunta por empleados, departamentos, presupuestos o números de la DB.
 
 Responde solo con la clasificación en formato JSON. No respondas la pregunta del usuario.
 """

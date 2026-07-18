@@ -8,6 +8,7 @@ Requiere DATABASE_URL en el entorno (.env).
 
 import os
 import sys
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -105,6 +106,33 @@ def main() -> None:
             )
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS vacaciones_saldo (
+                    id SERIAL PRIMARY KEY,
+                    empleado_email TEXT UNIQUE,
+                    dias_totales INTEGER DEFAULT 22,
+                    dias_usados INTEGER DEFAULT 0,
+                    anio INTEGER
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vacaciones_solicitudes (
+                    id SERIAL PRIMARY KEY,
+                    solicitante TEXT,
+                    fecha_inicio TEXT,
+                    fecha_fin TEXT,
+                    dias INTEGER,
+                    estado TEXT,
+                    aprobado_por TEXT,
+                    created_at TEXT,
+                    motivo TEXT,
+                    idempotency_key TEXT
+                )
+                """
+            )
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS hitl_queue (
                     thread_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL DEFAULT 'pending',
@@ -170,6 +198,21 @@ def main() -> None:
                         ("Laptop lenta", "baja", "abierto", 2, "system", "2026-07-16T00:00:00"),
                         ("Email no llega", "alta", "cerrado", 1, "system", "2026-07-16T00:00:00"),
                         ("Solicitud de monitor", "baja", "abierto", 3, "system", "2026-07-16T00:00:00"),
+                    ],
+                )
+
+            anio_actual = datetime.now().year
+            cur.execute("SELECT COUNT(*) FROM vacaciones_saldo")
+            if cur.fetchone()[0] == 0:
+                cur.executemany(
+                    "INSERT INTO vacaciones_saldo (empleado_email, dias_totales, dias_usados, anio) VALUES (%s, %s, %s, %s)",
+                    [
+                        ("ana@aegiscorp.com", 22, 0, anio_actual),
+                        ("luis@aegiscorp.com", 22, 0, anio_actual),
+                        ("maria@aegiscorp.com", 22, 0, anio_actual),
+                        ("carlos@aegiscorp.com", 22, 0, anio_actual),
+                        ("elena@aegiscorp.com", 22, 0, anio_actual),
+                        ("javier@aegiscorp.com", 22, 0, anio_actual),
                     ],
                 )
 

@@ -12,6 +12,11 @@ Para añadir una nueva herramienta:
 from src.tools.email import enviar_email
 from src.tools.sql import consultar_sql_tool
 from src.tools.tickets import buscar_ticket, crear_ticket, listar_tickets
+from src.tools.vacaciones import (
+    consultar_saldo_vacaciones,
+    listar_solicitudes_vacaciones,
+    solicitar_vacaciones,
+)
 
 # Registro de todas las herramientas disponibles
 # Clave = nombre unico, Valor = funcion @tool de LangChain
@@ -21,6 +26,9 @@ TOOLS = {
     "buscar_ticket": buscar_ticket,
     "enviar_email": enviar_email,
     "consultar_sql": consultar_sql_tool,
+    "consultar_saldo_vacaciones": consultar_saldo_vacaciones,
+    "solicitar_vacaciones": solicitar_vacaciones,
+    "listar_solicitudes_vacaciones": listar_solicitudes_vacaciones,
 }
 
 

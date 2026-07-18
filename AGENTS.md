@@ -71,9 +71,9 @@ python -m src.rag.ingest
 | `make verify` | Verificación local rápida: tests + compile + frontend |
 | `make full` | Verificación completa incluyendo evals/redteam |
 | `make install-hooks` | Instala el pre-commit hook de Git |
-| `.venv/bin/python -m pytest tests/ -q` | Tests deterministas (82 tests) |
-| `.venv/bin/python -m evals.run_evals --save` | Suite de evaluaciones (33 casos) |
-| `.venv/bin/python -m redteam.run_redteam --save` | Suite de red teaming (36 ataques) |
+| `.venv/bin/python -m pytest tests/ -q` | Tests deterministas (105 tests) |
+| `.venv/bin/python -m evals.run_evals --save` | Suite de evaluaciones (37 casos) |
+| `.venv/bin/python -m redteam.run_redteam --save` | Suite de red teaming (42 ataques) |
 | `.venv/bin/python scripts/verify_all.py --full` | Script de verificación con baseline checks |
 | `.venv/bin/python scripts/check_vector_store.py` | Reporta backend vectorial activo |
 | `python scripts/cli_chat.py` | CLI interactivo para debug |
@@ -102,9 +102,10 @@ python -m src.rag.ingest
 ## Cómo añadir una herramienta
 
 1. Crear función decorada con `@tool` en `src/tools/<nombre>.py`.
-2. Importarla en `src/tools/registry.py` y añadirla al diccionario `TOOLS`.
-3. Actualizar `src/security/rbac.py` si tiene permisos especiales por rol.
-4. Añadir tests y payloads de red teaming si expone nueva superficie de ataque.
+2. Si usa tablas nuevas, crearlas en `src/tools/sql.py` (SQLite), `scripts/migrate_postgres.py` (Postgres) y actualizar `ALLOWED_TABLES`.
+3. Importarla en `src/tools/registry.py` y añadirla al diccionario `TOOLS`.
+4. Actualizar `src/security/rbac.py` si tiene permisos especiales por rol.
+5. Añadir tests y payloads de red teaming si expone nueva superficie de ataque.
 
 ## Seguridad y guardrails
 
@@ -117,8 +118,8 @@ python -m src.rag.ingest
 
 ## Evals, observabilidad y trazas
 
-- `evals/run_evals.py`: 33 casos, guarda en `evals/results/`.
-- `redteam/run_redteam.py`: 36 ataques, guarda en `redteam/results/`.
+- `evals/run_evals.py`: 37 casos, guarda en `evals/results/`.
+- `redteam/run_redteam.py`: 42 ataques, guarda en `redteam/results/`.
 - Métricas en `src/observability/metrics.py` y trazas JSONL en `data/traces.jsonl`.
 
 ## Estado de verificación final
