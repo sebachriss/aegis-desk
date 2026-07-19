@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, Bot, User as UserIcon, Info } from "lucide-react";
-import { sendChat, type ChatResponse } from "@/lib/api";
+import { chatStream, sendChat, type ChatResponse } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,14 +21,22 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [activeNode, setActiveNode] = useState<string | null>(null);
   const [showMetadata, setShowMetadata] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, activeNode]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,27 +46,106 @@ export default function ChatPage() {
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: query }]);
     setLoading(true);
+    setActiveNode(null);
+
+    const assistantIndex = messages.length + 1;
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: "", metadata: undefined },
+    ]);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let receivedToken = false;
 
     try {
-      const res = await sendChat(query);
-      setMessages((prev) => [...prev, { role: "assistant", content: res.respuesta, metadata: res }]);
-
-      if (res.requires_hitl) {
-        toast.warning("Esta acción requiere aprobación humana. Ve a Aprobaciones.");
-      }
+      const res = await chatStream(
+        query,
+        {
+          onNode: (payload) => {
+            setActiveNode(payload.label);
+          },
+          onToken: (payload) => {
+            receivedToken = true;
+            setMessages((prev) => {
+              const next = [...prev];
+              if (next[assistantIndex]?.role === "assistant") {
+                next[assistantIndex] = {
+                  ...next[assistantIndex],
+                  content: next[assistantIndex].content + payload.token,
+                };
+              }
+              return next;
+            });
+          },
+          onInterrupt: (payload) => {
+            toast.warning(`Aprobación requerida (thread ${payload.thread_id}). Ve a Aprobaciones.`);
+          },
+          onDone: (payload) => {
+            setMessages((prev) => {
+              const next = [...prev];
+              if (next[assistantIndex]?.role === "assistant") {
+                next[assistantIndex] = {
+                  ...next[assistantIndex],
+                  content: payload.respuesta,
+                  metadata: payload,
+                };
+              }
+              return next;
+            });
+            if (payload.requires_hitl) {
+              toast.warning("Esta acción requiere aprobación humana. Ve a Aprobaciones.");
+            }
+          },
+        },
+        controller.signal
+      );
+      setMessages((prev) => {
+        const next = [...prev];
+        if (next[assistantIndex]?.role === "assistant") {
+          next[assistantIndex] = { ...next[assistantIndex], metadata: res };
+        }
+        return next;
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
-      if (msg === "Sesión expirada") {
-        toast.error("Sesión expirada. Cierra sesión y vuelve a iniciar.");
-      } else {
-        toast.error(msg);
+      // Fallback a /chat si el streaming falla antes del primer token o hay error
+      try {
+        const res = await sendChat(query);
+        setMessages((prev) => {
+          const next = [...prev];
+          if (next[assistantIndex]?.role === "assistant") {
+            next[assistantIndex] = {
+              ...next[assistantIndex],
+              content: res.respuesta,
+              metadata: res,
+            };
+          }
+          return next;
+        });
+        if (res.requires_hitl) {
+          toast.warning("Esta acción requiere aprobación humana. Ve a Aprobaciones.");
+        }
+      } catch {
+        if (msg === "Sesión expirada") {
+          toast.error("Sesión expirada. Cierra sesión y vuelve a iniciar.");
+        } else if (receivedToken) {
+          toast.error("El stream se interrumpió. Inténtalo de nuevo.");
+        } else {
+          toast.error(msg);
+        }
+        setMessages((prev) => {
+          const next = [...prev];
+          if (next[assistantIndex]?.role === "assistant") {
+            next[assistantIndex] = { ...next[assistantIndex], content: `❌ Error: ${msg}` };
+          }
+          return next;
+        });
       }
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `❌ Error: ${msg}` },
-      ]);
     } finally {
       setLoading(false);
+      setActiveNode(null);
+      abortRef.current = null;
     }
   };
 
@@ -158,8 +245,11 @@ export default function ChatPage() {
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
               <Bot className="h-5 w-5 text-primary" />
             </div>
-            <Card className="p-3.5">
+            <Card className="p-3.5 flex items-center gap-3">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              {activeNode ? (
+                <span className="text-sm text-muted-foreground">{activeNode}</span>
+              ) : null}
             </Card>
           </div>
         )}

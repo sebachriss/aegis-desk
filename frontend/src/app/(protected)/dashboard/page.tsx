@@ -1,8 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Clock, ShieldX, TrendingUp, MessageSquare } from "lucide-react";
-import { getStats, type Stats } from "@/lib/api";
+import { Activity, Clock, ShieldX, TrendingUp, MessageSquare, Timer, Gauge, AlertCircle } from "lucide-react";
+import { getStats, ApiError, type Stats } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -59,10 +59,14 @@ function KPICard({
 }
 
 export default function DashboardPage() {
-  const { data: stats, isLoading } = useQuery<Stats>({
+  const { data: stats, isLoading, error } = useQuery<Stats>({
     queryKey: ["stats"],
     queryFn: getStats,
-    refetchInterval: 30000,
+    refetchInterval: (query) => (query.state.error ? false : 5000),
+    retry: (failureCount, error) => {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return false;
+      return failureCount < 2;
+    },
   });
 
   if (isLoading) {
@@ -79,15 +83,47 @@ export default function DashboardPage() {
     );
   }
 
+  if (error) {
+    const is403 = error instanceof ApiError && error.status === 403;
+    return (
+      <div className="p-8">
+        <div className="rounded-md border border-destructive/50 bg-destructive/5 p-6 flex items-start gap-4">
+          <AlertCircle className="h-6 w-6 text-destructive shrink-0 mt-0.5" />
+          <div>
+            <h2 className="text-lg font-semibold text-destructive">{is403 ? "Acceso denegado" : "Error"}</h2>
+            <p className="text-muted-foreground mt-1">
+              {is403
+                ? "El dashboard de métricas requiere rol de administrador."
+                : error instanceof Error
+                  ? error.message
+                  : "No se pudieron cargar las métricas."}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!stats) return null;
 
   const intentionData = Object.entries(stats.by_intencion || {}).map(([name, data]) => ({
     name,
     count: data.count,
     confidence: Math.round(data.avg_confidence * 100),
+    avgElapsed: data.avg_elapsed ?? 0,
+    p50: data.latency_p50 ?? 0,
+    p95: data.latency_p95 ?? 0,
   }));
 
   const pieData = intentionData.map((d) => ({ name: d.name, value: d.count }));
+
+  const hourlyData = (stats.requests_per_hour || []).map((h) => ({
+    ...h,
+    shortHour: h.hour.slice(11, 16),
+  }));
+
+  const securityBlocks = Object.entries(stats.security_blocks_by_type || {});
+  const hitlQueue = Object.entries(stats.hitl_queue || {});
 
   return (
     <div className="p-8 space-y-6">
@@ -97,7 +133,7 @@ export default function DashboardPage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <KPICard
           title="Total ejecuciones"
           value={stats.total}
@@ -125,6 +161,20 @@ export default function DashboardPage() {
           icon={ShieldX}
           description="Ataques bloqueados por security node"
           colorIndex={3}
+        />
+        <KPICard
+          title="Latencia p50"
+          value={`${(stats.latency_p50 || 0).toFixed(2)}s`}
+          icon={Timer}
+          description="Mediana de respuesta"
+          colorIndex={0}
+        />
+        <KPICard
+          title="Latencia p95"
+          value={`${(stats.latency_p95 || 0).toFixed(2)}s`}
+          icon={Gauge}
+          description="Percentil 95 de respuesta"
+          colorIndex={1}
         />
       </div>
 
@@ -205,6 +255,78 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      {/* Requests per hour */}
+      {hourlyData.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Requests por hora (últimas 24h)</CardTitle>
+            <CardDescription>Volumen de tráfico en el último día</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={hourlyData}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis dataKey="shortHour" className="text-xs" />
+                <YAxis className="text-xs" />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "var(--popover)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                  }}
+                />
+                <Bar dataKey="count" fill="var(--chart-4)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Security blocks and HITL queue */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Bloqueos por tipo</CardTitle>
+            <CardDescription>Clasificación de bloqueos del security node</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {securityBlocks.length > 0 ? (
+              <div className="space-y-2">
+                {securityBlocks.map(([type, count]) => (
+                  <div key={type} className="flex items-center justify-between text-sm">
+                    <span className="capitalize text-muted-foreground">{type.replace(/_/g, " ")}</span>
+                    <span className="font-bold tabular-nums">{count}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No hay bloqueos registrados.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Cola HITL</CardTitle>
+            <CardDescription>Estado de las aprobaciones pendientes</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {hitlQueue.length > 0 ? (
+              <div className="space-y-2">
+                {hitlQueue.map(([status, count]) => (
+                  <div key={status} className="flex items-center justify-between text-sm">
+                    <span className="capitalize text-muted-foreground">{status}</span>
+                    <span className="font-bold tabular-nums">{count}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No hay datos de HITL.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Detail table */}
       <Card>
         <CardHeader>
@@ -219,6 +341,8 @@ export default function DashboardPage() {
                   <th className="px-4 py-3 text-left font-medium">Intención</th>
                   <th className="px-4 py-3 text-right font-medium">Casos</th>
                   <th className="px-4 py-3 text-right font-medium">Avg Confidence</th>
+                  <th className="px-4 py-3 text-right font-medium">Avg Tiempo</th>
+                  <th className="px-4 py-3 text-right font-medium">p95</th>
                   <th className="px-4 py-3 text-left font-medium">Estado</th>
                 </tr>
               </thead>
@@ -228,6 +352,8 @@ export default function DashboardPage() {
                     <td className="px-4 py-3 font-medium">{row.name}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{row.count}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{row.confidence}%</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{(row.avgElapsed || 0).toFixed(2)}s</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{(row.p95 || 0).toFixed(2)}s</td>
                     <td className="px-4 py-3">
                       <Badge variant={row.confidence >= 80 ? "default" : row.confidence >= 60 ? "secondary" : "destructive"}>
                         {row.confidence >= 80 ? "Saludable" : row.confidence >= 60 ? "Aceptable" : "Bajo"}
@@ -237,7 +363,7 @@ export default function DashboardPage() {
                 ))}
                 {intentionData.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                       No hay datos todavía. Envía mensajes desde el Chat.
                     </td>
                   </tr>

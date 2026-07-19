@@ -21,6 +21,7 @@ except ImportError as exc:
     sys.exit(1)
 
 from src.db.postgres_utils import normalize_database_url, get_postgres_connection
+from src.rag.embeddings import get_embedding_dimension
 
 
 def _enable_rls(cur):
@@ -57,6 +58,61 @@ def _enable_vector(cur):
     except psycopg.Error as exc:
         print(f"Advertencia: no se pudo crear/mover extension vector: {exc}")
         print("Habilitala manualmente desde Supabase: Database > Extensions > vector")
+
+
+def _get_vector_dimension(cur, table: str, column: str) -> int | None:
+    """Devuelve la dimensión de una columna vector, o None si no existe/no es vector."""
+    cur.execute(
+        """
+        SELECT pg_catalog.format_type(atttypid, atttypmod)
+        FROM pg_attribute
+        WHERE attrelid = %s::regclass
+          AND attname = %s
+        """,
+        (table, column),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    type_str = row[0]
+    # type_str tiene forma "extensions.vector(384)" o "vector(384)"
+    if "vector(" in type_str:
+        try:
+            return int(type_str.split("vector(")[1].split(")")[0])
+        except (ValueError, IndexError):
+            pass
+    return None
+
+
+def _ensure_document_embeddings(cur, dim: int):
+    """Crea o recrea la tabla de embeddings si la dimensión actual no coincide.
+
+    Si cambiamos de modelo (por ejemplo de 384 a 4096 dims), los vectores
+    antiguos son inválidos, así que es más seguro recrear la tabla.
+    """
+    existing_dim = _get_vector_dimension(cur, "document_embeddings", "embedding")
+    if existing_dim is not None and existing_dim != dim:
+        print(f"  Dimensión actual del vector: {existing_dim}. Necesaria: {dim}. Recreando tabla document_embeddings.")
+        cur.execute("DROP TABLE IF EXISTS document_embeddings CASCADE")
+
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS document_embeddings (
+            id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            source TEXT,
+            metadata JSONB,
+            embedding vector({dim})
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_document_embeddings_embedding
+        ON document_embeddings
+        USING hnsw (embedding vector_cosine_ops)
+        """
+    )
 
 
 def main() -> None:
@@ -149,24 +205,8 @@ def main() -> None:
                 )
                 """
             )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS document_embeddings (
-                    id TEXT PRIMARY KEY,
-                    content TEXT NOT NULL,
-                    source TEXT,
-                    metadata JSONB,
-                    embedding vector(384)
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_document_embeddings_embedding
-                ON document_embeddings
-                USING hnsw (embedding vector_cosine_ops)
-                """
-            )
+            embedding_dim = get_embedding_dimension()
+            _ensure_document_embeddings(cur, embedding_dim)
 
             cur.execute("SELECT COUNT(*) FROM departamentos")
             if cur.fetchone()[0] == 0:

@@ -1,7 +1,7 @@
 """Retriever: busca chunks relevantes en la base de datos vectorial.
 
-Por defecto usa Chroma local. Si PINECONE_API_KEY está configurado,
-usa Pinecone como backend vectorial.
+Soporta Chroma local, Pinecone y Supabase pgvector. El modelo de embeddings
+se obtiene de `get_embeddings()` (DeepInfra o local según `DEEPINFRA_API_KEY`).
 """
 
 from langchain_chroma import Chroma
@@ -9,7 +9,7 @@ from langchain_chroma import Chroma
 from src.config import get_settings
 from src.db.pinecone_store import is_pinecone_configured, search as pinecone_search
 from src.db.supabase_vector import is_supabase_vector_configured, search as supabase_search
-from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
+from src.rag.embeddings import get_embeddings
 from src.rag.ingest import CHROMA_DIR
 
 # Singleton del vectorstore (se carga una sola vez)
@@ -45,7 +45,7 @@ def _get_chroma_vectorstore() -> Chroma:
             "Ejecuta 'python -m src.rag.ingest' primero."
         )
 
-    embeddings = LocalEmbeddings(EMBEDDING_MODEL)
+    embeddings = get_embeddings()
 
     _vectorstore = Chroma(
         persist_directory=str(CHROMA_DIR),

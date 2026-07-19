@@ -308,6 +308,24 @@ def get_status(thread_id: str) -> str | None:
     return _with_sqlite(_sqlite_exec)
 
 
+def get_status_counts() -> dict[str, int]:
+    """Devuelve conteos de la cola HITL por status."""
+    sql = "SELECT status, COUNT(*) FROM hitl_queue GROUP BY status"
+
+    def _sqlite_exec(conn):
+        rows = conn.execute(sql).fetchall()
+        return {row["status"]: row[1] for row in rows}
+
+    def _postgres_exec(conn):
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return {row[0]: row[1] for row in cur.fetchall()}
+
+    if _use_postgres():
+        return _with_postgres(_postgres_exec)
+    return _with_sqlite(_sqlite_exec)
+
+
 def health_check(connect_timeout: int = 3) -> str:
     """Verifica que la cola HITL responde."""
     try:

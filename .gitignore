@@ -34,8 +34,9 @@ Thumbs.db
 # LangSmith/Langfuse (local)
 langfuse.db
 
-# Eval results (se generan al correr evals)
+# Eval/redteam results (se generan al correr suites)
 evals/results/
+redteam/results/
 
 # Python cache
 .pytest_cache/

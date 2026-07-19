@@ -22,12 +22,14 @@ Para usar LangSmith en el futuro:
 import hashlib
 import hmac
 import json
+import math
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.config import get_settings
+from src.db import hitl_queue as hitl_db
 from src.security.pii_filter import filter_pii
 
 TRACES_PATH = Path(__file__).parent.parent.parent / "data" / "traces.jsonl"
@@ -100,6 +102,7 @@ def trace_execution(
     retrieval_scores: list[float] | None = None,
     discarded: int | None = None,
     correlation_id: str | None = None,
+    block_reason: str | None = None,
 ) -> dict:
     """Registra una ejecución del grafo en el archivo de traces.
 
@@ -121,6 +124,7 @@ def trace_execution(
         retrieval_scores: Scores de similitud de los chunks recuperados (RAG).
         discarded: Chunks descartados por baja relevancia/fuente inválida (RAG).
         correlation_id: ID de correlación de la request.
+        block_reason: Motivo de bloqueo (prompt_injection, rate_limit, etc.).
 
     Returns:
         Diccionario con el trace registrado.
@@ -147,6 +151,7 @@ def trace_execution(
         "retrieval_scores": retrieval_scores,
         "discarded": discarded,
         "correlation_id": correlation_id,
+        "block_reason": block_reason,
     }
 
     # Append al archivo JSONL (una línea por trace) y aplicar retención
@@ -212,56 +217,128 @@ def load_traces(limit: int = 100) -> list[dict]:
     return list(reversed(traces))[:limit]
 
 
+def _percentile(values: list[float], p: float) -> float:
+    """Devuelve el percentil p (0-100) de una lista de números."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    k = (len(s) - 1) * p / 100
+    f = math.floor(k)
+    c = math.ceil(k)
+    if f == c:
+        return round(s[int(k)], 3)
+    return round(s[f] * (c - k) + s[c] * (k - f), 3)
+
+
 def get_stats() -> dict:
     """Calcula estadísticas agregadas de los traces.
 
     Returns:
-        Diccionario con stats: total, por intención, avg confidence, avg tiempo.
+        Diccionario con stats: total, por intención, avg confidence, avg tiempo,
+        latencia p50/p95, bloqueos por tipo, cola HITL y serie temporal 24h.
     """
     traces = load_traces(limit=10000)
 
     if not traces:
-        return {"total": 0}
+        return {
+            "total": 0,
+            "by_intencion": {},
+            "avg_confidence": 0.0,
+            "avg_elapsed": 0.0,
+            "latency_p50": 0.0,
+            "latency_p95": 0.0,
+            "total_retries": 0,
+            "blocked": 0,
+            "security_blocks_by_type": {},
+            "hitl_queue": {},
+            "requests_per_hour": [],
+        }
 
     stats = {
         "total": len(traces),
         "by_intencion": {},
         "avg_confidence": 0.0,
         "avg_elapsed": 0.0,
+        "latency_p50": 0.0,
+        "latency_p95": 0.0,
         "total_retries": 0,
         "blocked": 0,
+        "security_blocks_by_type": {},
+        "hitl_queue": {},
+        "requests_per_hour": [],
     }
 
     confidences = []
     elapsed = []
+    elapsed_by_intencion: dict[str, list[float]] = {}
+    confidences_by_intencion: dict[str, list[float]] = {}
+
+    cutoff_24h = (datetime.now() - timedelta(hours=24)).isoformat()
+    requests_by_hour: dict[str, int] = {}
 
     for trace in traces:
         intencion = trace.get("intencion", "unknown")
 
         if intencion not in stats["by_intencion"]:
-            stats["by_intencion"][intencion] = {"count": 0, "avg_confidence": 0.0}
-
+            stats["by_intencion"][intencion] = {
+                "count": 0,
+                "avg_confidence": 0.0,
+                "avg_elapsed": 0.0,
+                "latency_p50": 0.0,
+                "latency_p95": 0.0,
+            }
         stats["by_intencion"][intencion]["count"] += 1
 
-        if trace.get("confidence"):
-            confidences.append(trace["confidence"])
+        confidence = trace.get("confidence")
+        if confidence is not None:
+            confidences.append(confidence)
+            confidences_by_intencion.setdefault(intencion, []).append(confidence)
 
-        if trace.get("elapsed_seconds"):
-            elapsed.append(trace["elapsed_seconds"])
+        elapsed_val = trace.get("elapsed_seconds")
+        if elapsed_val is not None:
+            elapsed.append(elapsed_val)
+            elapsed_by_intencion.setdefault(intencion, []).append(elapsed_val)
 
         stats["total_retries"] += trace.get("retries", 0)
 
         if intencion == "bloqueado":
             stats["blocked"] += 1
+            block_reason = trace.get("block_reason", "unknown")
+            stats["security_blocks_by_type"][block_reason] = stats["security_blocks_by_type"].get(block_reason, 0) + 1
+
+        # Serie temporal de requests por hora (últimas 24h)
+        ts = trace.get("timestamp", "")
+        if ts and ts >= cutoff_24h:
+            try:
+                hour = ts[:13]  # YYYY-MM-DDTHH
+                requests_by_hour[hour] = requests_by_hour.get(hour, 0) + 1
+            except Exception:
+                pass
 
     stats["avg_confidence"] = round(sum(confidences) / len(confidences), 3) if confidences else 0
     stats["avg_elapsed"] = round(sum(elapsed) / len(elapsed), 3) if elapsed else 0
+    stats["latency_p50"] = _percentile(elapsed, 50)
+    stats["latency_p95"] = _percentile(elapsed, 95)
 
-    # Calcular avg confidence por intención
+    # Completar métricas por intención
     for intencion, data in stats["by_intencion"].items():
-        int_confidences = [t["confidence"] for t in traces
-                           if t.get("intencion") == intencion and t.get("confidence")]
-        data["avg_confidence"] = round(sum(int_confidences) / len(int_confidences), 3) if int_confidences else 0
+        ic = confidences_by_intencion.get(intencion, [])
+        ie = elapsed_by_intencion.get(intencion, [])
+        data["avg_confidence"] = round(sum(ic) / len(ic), 3) if ic else 0
+        data["avg_elapsed"] = round(sum(ie) / len(ie), 3) if ie else 0
+        data["latency_p50"] = _percentile(ie, 50)
+        data["latency_p95"] = _percentile(ie, 95)
+
+    # Serie temporal ordenada
+    stats["requests_per_hour"] = [
+        {"hour": h, "count": c} for h, c in sorted(requests_by_hour.items())
+    ]
+
+    # Conteos de cola HITL
+    try:
+        stats["hitl_queue"] = hitl_db.get_status_counts()
+    except Exception:
+        stats["hitl_queue"] = {}
 
     return stats
 

@@ -48,6 +48,12 @@ def get_postgres_pool(conninfo: str | None = None, **kwargs):
         raise RuntimeError("DATABASE_URL no configurada")
 
     normalized = normalize_database_url(conninfo)
+    # Keepalives y timeout para detectar conexiones muertas con Supabase Pooler.
+    kwargs.setdefault("keepalives", 1)
+    kwargs.setdefault("keepalives_idle", 15)
+    kwargs.setdefault("keepalives_interval", 5)
+    kwargs.setdefault("keepalives_count", 3)
+    kwargs.setdefault("connect_timeout", 15)
     kwargs.setdefault("options", "-c search_path=public,extensions")
     _pool = psycopg_pool.ConnectionPool(
         normalized,
@@ -55,6 +61,8 @@ def get_postgres_pool(conninfo: str | None = None, **kwargs):
         max_size=10,
         open=True,
         kwargs=kwargs,
+        check=psycopg_pool.ConnectionPool.check_connection,
+        max_idle=300,
     )
     _pool.wait()
     return _pool
@@ -78,6 +86,12 @@ def get_postgres_connection(conninfo: str | None = None, *, read_only: bool = Fa
         raise RuntimeError("DATABASE_URL no configurada")
 
     normalized = normalize_database_url(conninfo)
+    # Keepalives para conexiones directas contra Supabase Pooler.
+    kwargs.setdefault("keepalives", 1)
+    kwargs.setdefault("keepalives_idle", 15)
+    kwargs.setdefault("keepalives_interval", 5)
+    kwargs.setdefault("keepalives_count", 3)
+    kwargs.setdefault("connect_timeout", 15)
     options = kwargs.get("options", "")
     options += " -c search_path=public,extensions"
     if read_only:

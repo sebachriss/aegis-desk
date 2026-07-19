@@ -80,8 +80,9 @@ def hitl_node(state: AgentState) -> dict:
     action_plan = state.get("action_plan")
 
     if not action_plan:
+        # No debería alcanzarse este nodo sin action_plan; si ocurre, terminar sin
+        # sobrescribir la respuesta del worker.
         return {
-            "respuesta": "No se requiere revision humana.",
             "requires_human_review": False,
         }
 

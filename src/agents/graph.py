@@ -117,17 +117,18 @@ def route_from_critic(state: AgentState) -> str:
     requires_retry = state.get("requires_retry", True)
     intencion = state.get("intencion", "chat")
 
-    # Si el critico marco revision humana explicita o ya no se permite reintento
-    if requires_human:
+    # HITL solo para acciones con action_plan.
+    # RAG/chat/datos con baja confianza terminan con la mejor respuesta disponible.
+    if requires_human and intencion == "accion" and state.get("action_plan"):
         return "hitl_review"
 
     # Si la confianza es alta, la respuesta es buena
     if confidence >= 0.7:
         return END
 
-    # Si la confianza es baja y el critico pide reintento, volver al worker.
+    # Si el crítico no pide reintento y la confianza sigue baja, terminamos.
     if not requires_retry:
-        return "hitl_review"
+        return END
 
     # Para acciones, si ya se ejecutaron no las re-lanzamos (evita duplicar side effects).
     if intencion == "accion":

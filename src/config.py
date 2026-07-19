@@ -28,6 +28,19 @@ class Settings(BaseSettings):
         description="Modelo rápido para clasificación y evaluación",
     )
 
+    # Modelo de embeddings en DeepInfra (OpenAI-compatible)
+    deepinfra_embedding_model: str = Field(
+        default="Qwen/Qwen3-Embedding-8B",
+        description="Modelo de embeddings multilingüe en DeepInfra",
+    )
+
+    # Dimensión de los embeddings (debe coincidir con el modelo y con pgvector)
+    # 1024 funciona con índices hnsw de pgvector (límite 2000) y aprovecha MRL.
+    embedding_dimension: int = Field(
+        default=1024,
+        description="Dimensión de los vectores de embedding",
+    )
+
     # Groq (free tier) — para nodos livianos: supervisor y crítico
     groq_api_key: str = Field(
         default="",

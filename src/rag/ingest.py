@@ -1,13 +1,15 @@
-"""Pipeline de ingesta: lee documentos, los parte en chunks, genera embeddings y los guarda en Chroma.
+"""Pipeline de ingesta: lee documentos, los parte en chunks, genera embeddings y los guarda en Chroma/Supabase.
 
 Flujo:
   1. Leer archivos .md de src/rag/documents/
   2. Partir cada documento en chunks (RecursiveCharacterTextSplitter)
-  3. Generar embeddings con sentence-transformers (local, gratis)
-  4. Guardar todo en Chroma (base de datos vectorial local persistente)
+  3. Generar embeddings con el modelo configurado (DeepInfra OpenAI-compatible o sentence-transformers local)
+  4. Guardar todo en Chroma/Pinecone/Supabase según la configuración
 """
 
 from pathlib import Path
+
+import shutil
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -15,7 +17,7 @@ from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharac
 
 from src.db.pinecone_store import is_pinecone_configured, upsert_documents as upsert_pinecone
 from src.db.supabase_vector import is_supabase_vector_configured, upsert_documents as upsert_supabase
-from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
+from src.rag.embeddings import get_embeddings
 from src.security.prompt_injection import detect_prompt_injection, sanitize_input
 
 # Ruta donde se guardan los documentos fuente
@@ -92,6 +94,16 @@ def split_documents(documents: list[Document]) -> list[Document]:
         for section in sections:
             # Preservar el source original + añadir info del encabezado
             section.metadata["source"] = source
+            # Incluir los encabezados en el texto indexado mejora la recuperación
+            # para preguntas generales (ej: "qué dice el manual sobre seguridad").
+            headers = []
+            for h in ["header_1", "header_2", "header_3"]:
+                val = section.metadata.get(h)
+                if val:
+                    headers.append(val)
+            if headers:
+                header_text = " > ".join(headers)
+                section.page_content = f"{header_text}\n\n{section.page_content}"
             section_chunks.append(section)
 
     print(f"  Paso 1: {len(documents)} documentos -> {len(section_chunks)} secciones")
@@ -133,7 +145,13 @@ def create_vectorstore(chunks: list[Document]) -> Chroma:
 
     La base se persiste en disco (CHROMA_DIR), asi que sobrevive reinicios.
     """
-    embeddings = LocalEmbeddings()
+    embeddings = get_embeddings()
+
+    # Si la colección anterior fue generada con otra dimensión, la borramos
+    # para evitar conflictos. En producción con Pinecone/Supabase se maneja
+    # a través de migraciones.
+    if CHROMA_DIR.exists():
+        shutil.rmtree(CHROMA_DIR)
 
     # Asegurar que el directorio existe
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
@@ -160,7 +178,7 @@ def create_vectorstore(chunks: list[Document]) -> Chroma:
 
     if is_supabase_vector_configured():
         print("  Subiendo chunks a Supabase pgvector...")
-        embeddings_model = LocalEmbeddings()
+        embeddings_model = get_embeddings()
         embs = embeddings_model.embed_documents([c.page_content for c in chunks])
         upsert_supabase(chunks, embs)
         print("  Supabase pgvector actualizado.")

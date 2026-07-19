@@ -1,3 +1,21 @@
+## 2026-07-19 — Streaming SSE, métricas ampliadas y dashboard
+
+**Objetivo:** implementar respuestas en streaming y mejorar el dashboard/métricas según `PLAN_STREAMING_DASHBOARD.md`.
+
+- **`src/api/streaming.py`**: generador `stream_chat_events` basado en `graph.astream_events(version="v2")` que emite eventos SSE tipados (`node`, `token`, `interrupt`, `done`, `error`) con timeout, PII filter y trazas.
+- **`src/api/main.py`**: nuevo endpoint `POST /chat/stream` con las mismas guardas que `/chat` (`StreamingResponse` con `X-Accel-Buffering: no`).
+- **`src/observability/tracing.py`**: `trace_execution` ahora guarda `block_reason`; `get_stats()` devuelve `latency_p50`, `latency_p95`, `security_blocks_by_type`, `hitl_queue` y `requests_per_hour` (24h).
+- **`src/db/hitl_queue.py`**: `get_status_counts()` para métricas de la cola HITL.
+- **Frontend**: `chatStream`, parser SSE robusto y `AbortController` en `src/lib/api.ts`; `frontend/src/app/(protected)/chat/page.tsx` consume tokens en tiempo real, muestra nodo activo y hace fallback a `/chat` si el stream falla.
+- **Dashboard/métricas**: polling a 5s, KPIs de p50/p95, gráfico de requests por hora, bloqueos por tipo y cola HITL.
+- **Tests**: `tests/test_streaming.py` (10 tests) cubre auth, eventos SSE, HITL, bloqueos, timeout, error, paridad con `/chat` y nuevas métricas.
+- **Redteam**: nueva categoría `streaming` en `redteam/attacks/payloads.json` con 4 ataques (leak, bypass por canal, HITL auto-approve, error disclosure).
+
+**Verificación:**
+- `make test` → 115 passed.
+- `make compile` → OK.
+- `make verify` → OK (tests + compileall + frontend lint/build).
+
 ## 2026-07-18 — Funcionalidad de vacaciones
 
 **Objetivo:** implementar solicitud y consulta de vacaciones siguiendo el `PLAN_VACACIONES.md`.

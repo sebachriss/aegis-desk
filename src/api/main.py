@@ -3,6 +3,7 @@
 Endpoints:
   POST /login         — autenticar usuario y obtener JWT token
   POST /chat          — enviar mensaje (requiere auth)
+  POST /chat/stream   — enviar mensaje y recibir respuesta en streaming SSE
   GET  /hitl/pending  — listar threads con HITL pendiente (admin)
   POST /hitl/{thread_id}/approve — aprobar accion pendiente (admin)
   POST /hitl/{thread_id}/reject  — rechazar accion pendiente (admin)
@@ -10,7 +11,7 @@ Endpoints:
   GET  /health        — health check
   GET  /me            — info del usuario autenticado
 
-Auth: JWT token en header Authorization: Bearer <token>
+Auth: JWT token en header Authorization: Bearer <token> o cookie HttpOnly access_token
 HITL usa SqliteSaver como checkpointer y una cola persistente en SQLite.
 """
 
@@ -19,21 +20,32 @@ import json
 import sqlite3
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
+
+# Checkpointer async para streaming SSE
+try:
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from psycopg_pool import AsyncConnectionPool
+except ImportError:
+    AsyncPostgresSaver = None
+    AsyncConnectionPool = None
 from pydantic import BaseModel, Field
 
 from src.agents.graph import build_graph
+from src.api.streaming import stream_chat_events
 from src.auth.jwt_handler import create_access_token, get_current_user, revoke_token, verify_token
 from src.auth.users import authenticate, get_user
 from src.config import get_settings
 from src.db import hitl_queue as hitl_db
+from src.db.postgres_utils import normalize_database_url
 from src.observability.langsmith import setup_langsmith_tracing
 from src.observability.tracing import get_stats, trace_execution
 from src.security.pii_filter import filter_pii
@@ -78,10 +90,56 @@ def _get_checkpointer():
 _checkpointer = _get_checkpointer()
 _graph = build_graph(checkpointer=_checkpointer)
 
+# Grafo async para streaming SSE (se inicializa en lifespan con checkpointer async)
+_async_graph = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan: inicializa el grafo async para streaming con Postgres/Supabase."""
+    global _async_graph
+    pool = None
+    if settings.database_url and AsyncPostgresSaver is not None and AsyncConnectionPool is not None:
+        try:
+            normalized = normalize_database_url(settings.database_url)
+            pool_kwargs = {
+                "keepalives": 1,
+                "keepalives_idle": 15,
+                "keepalives_interval": 5,
+                "keepalives_count": 3,
+                "connect_timeout": 15,
+                "options": "-c search_path=public,extensions",
+            }
+            pool = AsyncConnectionPool(
+                normalized,
+                min_size=1,
+                max_size=10,
+                check=AsyncConnectionPool.check_connection,
+                max_idle=300,
+                kwargs=pool_kwargs,
+            )
+            await pool.open()
+            saver = AsyncPostgresSaver(conn=pool)
+            _async_graph = build_graph(checkpointer=saver)
+            app.state.async_pool = pool
+        except Exception as exc:
+            print(f"Advertencia: no se pudo crear grafo async para streaming: {exc}")
+            _async_graph = None
+    if _async_graph is None:
+        _async_graph = _graph
+    yield
+    if pool is not None:
+        try:
+            await pool.close()
+        except Exception:
+            pass
+
+
 app = FastAPI(
     title="Aegis Desk API",
     description="Plataforma de soporte interno inteligente multi-agente",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS restringido a los origenes configurados
@@ -448,6 +506,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user), request: R
             approved_by=None,
             approved_at=None,
             correlation_id=getattr(request.state, "correlation_id", None) if request else None,
+            block_reason="timeout",
         )
         raise HTTPException(status_code=504, detail="La solicitud excedio el tiempo maximo de espera")
     except Exception:
@@ -474,6 +533,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user), request: R
             retrieval_scores=result.get("retrieval_scores"),
             discarded=result.get("discarded"),
             correlation_id=getattr(request.state, "correlation_id", None) if request else None,
+            block_reason=result.get("block_reason"),
         )
 
     # Convertir rate limit interno a HTTP 429
@@ -527,6 +587,32 @@ async def chat(req: ChatRequest, user: dict = Depends(get_auth_user), request: R
         fuentes=result.get("fuentes", []),
         elapsed_seconds=round(elapsed, 2),
         requires_hitl=False,
+    )
+
+
+@app.post("/chat/stream")
+async def chat_stream(
+    req: ChatRequest,
+    user: dict = Depends(get_auth_user),
+    request: Request = None,
+):
+    """Envia un mensaje al agente y devuelve la respuesta en streaming SSE.
+
+    Mismas guardas que /chat (auth, rol). El stream emite eventos tipados:
+    node, token, interrupt, done, error.
+    """
+    if not validate_role(user["role"]):
+        raise HTTPException(status_code=403, detail="Rol invalido")
+
+    thread_id = str(uuid.uuid4())
+    graph_to_stream = _async_graph if _async_graph is not None else _graph
+    return StreamingResponse(
+        stream_chat_events(graph_to_stream, req.query, user, request, thread_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

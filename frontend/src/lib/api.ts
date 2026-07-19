@@ -47,13 +47,39 @@ export interface Source {
   content: string;
 }
 
+export interface IntentionStats {
+  count: number;
+  avg_confidence: number;
+  avg_elapsed?: number;
+  latency_p50?: number;
+  latency_p95?: number;
+}
+
+export interface HourlyRequest {
+  hour: string;
+  count: number;
+}
+
 export interface Stats {
   total: number;
   avg_confidence: number;
   avg_elapsed: number;
+  latency_p50: number;
+  latency_p95: number;
   blocked: number;
   total_retries: number;
-  by_intencion: Record<string, { count: number; avg_confidence: number }>;
+  by_intencion: Record<string, IntentionStats>;
+  security_blocks_by_type?: Record<string, number>;
+  hitl_queue?: Record<string, number>;
+  requests_per_hour?: HourlyRequest[];
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
 }
 
 function authHeaders(): HeadersInit {
@@ -89,6 +115,124 @@ export async function getMe(): Promise<User> {
   }
   if (!res.ok) throw new Error("No autenticado");
   return res.json();
+}
+
+export type SSEEventType = "node" | "token" | "interrupt" | "done" | "error";
+
+export interface SSEEvent {
+  type: SSEEventType;
+  payload: unknown;
+}
+
+export interface StreamCallbacks {
+  onNode?: (payload: { node: string; label: string }) => void;
+  onToken?: (payload: { token: string }) => void;
+  onInterrupt?: (payload: { thread_id: string; resumen: string }) => void;
+  onDone?: (payload: ChatResponse) => void;
+  onError?: (payload: { type: string; message: string }) => void;
+}
+
+/** Parser robusto de mensajes SSE: soporta múltiples eventos y líneas data multipartes. */
+export function parseSSE(buffer: string): { events: SSEEvent[]; remainder: string } {
+  const events: SSEEvent[] = [];
+  // Los eventos SSE terminan con dos saltos de línea.
+  const parts = buffer.split("\n\n");
+  const remainder = parts.pop() || "";
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of part.split("\n")) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+    const data = dataLines.join("\n");
+    try {
+      const payload: unknown = data ? JSON.parse(data) : null;
+      events.push({ type: eventName as SSEEventType, payload });
+    } catch {
+      events.push({ type: eventName as SSEEventType, payload: data });
+    }
+  }
+  return { events, remainder };
+}
+
+export async function chatStream(
+  query: string,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<ChatResponse> {
+  const res = await fetch(`${API_URL}/chat/stream`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ query }),
+    credentials: "include",
+    signal,
+  });
+  if (res.status === 401) {
+    emitUnauthorized();
+    throw new Error("Sesión expirada");
+  }
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("retry-after") || res.headers.get("Retry-After");
+    throw new Error(`Rate limit. Intenta en ${retryAfter || "unos segundos"}s.`);
+  }
+  if (!res.ok) throw new Error("Error en el chat streaming");
+  if (!res.body) throw new Error("El navegador no soporta streaming");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let donePayload: ChatResponse | null = null;
+  let errorPayload: { type: string; message: string } | null = null;
+
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        await reader.cancel();
+        throw new Error("Cancelado");
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, remainder } = parseSSE(buffer);
+      buffer = remainder;
+      for (const event of events) {
+        switch (event.type) {
+          case "node":
+            callbacks.onNode?.(event.payload as { node: string; label: string });
+            break;
+          case "token":
+            callbacks.onToken?.(event.payload as { token: string });
+            break;
+          case "interrupt":
+            callbacks.onInterrupt?.(event.payload as { thread_id: string; resumen: string });
+            break;
+          case "done":
+            donePayload = event.payload as ChatResponse;
+            callbacks.onDone?.(donePayload);
+            break;
+          case "error":
+            errorPayload = event.payload as { type: string; message: string };
+            callbacks.onError?.(errorPayload);
+            break;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (errorPayload) {
+    throw new Error(errorPayload.message || "Error en el stream");
+  }
+  if (donePayload) {
+    return donePayload;
+  }
+  throw new Error("Stream cerrado sin respuesta");
 }
 
 export async function sendChat(query: string): Promise<ChatResponse> {
@@ -159,9 +303,12 @@ export async function getStats(): Promise<Stats> {
   });
   if (res.status === 401) {
     emitUnauthorized();
-    throw new Error("Sesión expirada");
+    throw new ApiError(401, "Sesión expirada");
   }
-  if (!res.ok) throw new Error("Error al obtener stats");
+  if (res.status === 403) {
+    throw new ApiError(403, "No tienes permisos de admin");
+  }
+  if (!res.ok) throw new ApiError(res.status, "Error al obtener stats");
   return res.json();
 }
 

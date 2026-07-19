@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.config import get_settings
-from src.rag.embeddings import EMBEDDING_MODEL, LocalEmbeddings
+from src.rag.embeddings import get_embeddings
 
 if TYPE_CHECKING:
     from pinecone import Index
@@ -33,7 +33,7 @@ def _get_index() -> "Index":
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
-    embeddings = LocalEmbeddings(EMBEDDING_MODEL)
+    embeddings = get_embeddings()
     return embeddings.embed_documents(texts)
 
 

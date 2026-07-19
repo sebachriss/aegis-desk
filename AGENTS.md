@@ -71,9 +71,9 @@ python -m src.rag.ingest
 | `make verify` | Verificación local rápida: tests + compile + frontend |
 | `make full` | Verificación completa incluyendo evals/redteam |
 | `make install-hooks` | Instala el pre-commit hook de Git |
-| `.venv/bin/python -m pytest tests/ -q` | Tests deterministas (105 tests) |
+| `.venv/bin/python -m pytest tests/ -q` | Tests deterministas (115 tests) |
 | `.venv/bin/python -m evals.run_evals --save` | Suite de evaluaciones (37 casos) |
-| `.venv/bin/python -m redteam.run_redteam --save` | Suite de red teaming (42 ataques) |
+| `.venv/bin/python -m redteam.run_redteam --save` | Suite de red teaming (46 ataques) |
 | `.venv/bin/python scripts/verify_all.py --full` | Script de verificación con baseline checks |
 | `.venv/bin/python scripts/check_vector_store.py` | Reporta backend vectorial activo |
 | `python scripts/cli_chat.py` | CLI interactivo para debug |
@@ -113,6 +113,7 @@ python -m src.rag.ingest
 - SQL: solo `SELECT`. No permitir `INSERT`, `UPDATE`, `DELETE`, `DROP`.
 - Email: solo dominios de la whitelist (`aegiscorp.com`, `aegis.com`).
 - RBAC: `empleado` vs `admin`. Verificar `can_access(role, intencion)`.
+- **Streaming (`/chat/stream`)**: usa las mismas guardas que `/chat` (auth, RBAC, rate limit en `security_node`, PII filter en la respuesta final). Utiliza `graph.astream(..., stream_mode=["updates","messages","values"])` con un `AsyncPostgresSaver` para tokens y HITL con Supabase. Los eventos SSE tipados son `node`, `token`, `interrupt`, `done`, `error`; no se streamean tokens del supervisor/crítico.
 - **Supabase**: tablas tienen RLS habilitado; vector extension en schema `extensions`; service key solo en backend.
 - Cualquier cambio en `src/security/` debe pasar `.venv/bin/python -m pytest tests/ -q` y `python -m redteam.run_redteam --save`.
 

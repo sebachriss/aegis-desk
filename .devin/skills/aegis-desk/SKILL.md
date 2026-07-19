@@ -26,15 +26,15 @@ Usa esta skill cuando trabajes en el repositorio `aegis-desk` para recordar arqu
 | `make full` | Verify + evals + redteam |
 | `make test` | `pytest tests/ -q` |
 | `make evals` | Suite de evals (37 casos) |
-| `make redteam` | Suite de red teaming (42 ataques) |
+| `make redteam` | Suite de red teaming (46 ataques) |
 | `.venv/bin/python scripts/check_vector_store.py` | Reporta backend vectorial activo |
 | `PYTHONPATH=$PWD .venv/bin/python -m pytest tests/ -q` | Si `make test` no funciona |
 
 ## Verification baselines
 
-- `pytest`: 105 passed (82 anteriores + 23 de `tests/test_vacaciones.py`).
+- `pytest`: 115 passed (105 anteriores + 10 de `tests/test_streaming.py`).
 - `evals`: 37/37 (100%).
-- `redteam`: 42/42 (100%).
+- `redteam`: 46/46 (100%);
 - Frontend: `npm run lint && npm run build` OK.
 
 ## Common pitfalls
@@ -42,4 +42,6 @@ Usa esta skill cuando trabajes en el repositorio `aegis-desk` para recordar arqu
 - El retriever RAG prioriza: Pinecone > Supabase pgvector (`DATABASE_URL`) > Chroma local.
 - `consultar_sql` es una función callable; `consultar_sql_tool` es el `StructuredTool` para agentes.
 - HITL usa `interrupt()` de LangGraph; aprobación con `Command(resume={"decision": "approve", "approved_by": "..."})`.
-- Los traces se guardan en `data/traces.jsonl` con PII redactada.
+- Streaming: `POST /chat/stream` devuelve SSE tipados (`node`, `token`, `interrupt`, `done`, `error`) vía `src/api/streaming.py` y `graph.astream(..., stream_mode=["updates","messages","values"])` con `AsyncPostgresSaver`; usa las mismas guardas que `/chat`.
+- Métricas extendidas: `latency_p50/p95`, `security_blocks_by_type`, `hitl_queue` y `requests_per_hour` (24h).
+- Los traces se guardan en `data/traces.jsonl` con PII redactada y ahora también `block_reason`.

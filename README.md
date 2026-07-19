@@ -133,7 +133,8 @@ aegis-desk/
 │   │   ├── supabase_auth.py    # Auth opcional con Supabase (emails)
 │   │   └── jwt_handler.py        # JWT con HttpOnly cookies
 │   └── api/
-│       └── main.py             # FastAPI: /chat, /hitl, /stats, /health
+│       ├── main.py             # FastAPI: /chat, /chat/stream, /hitl, /stats, /health
+│       └── streaming.py        # Generador SSE para /chat/stream
 ├── ui/
 │   └── app.py                  # Streamlit (legacy, Chat/HITL/Dashboard)
 ├── frontend/                   # Next.js 16 + React 19 + shadcn/ui
@@ -250,11 +251,12 @@ docker compose up -d
 | Método | Path | Descripción |
 |---|---|---|
 | `POST` | `/login` | Autenticar usuario y obtener JWT (HttpOnly cookie) |
-| `POST` | `/chat` | Enviar mensaje al agente |
+| `POST` | `/chat` | Enviar mensaje al agente (respuesta completa) |
+| `POST` | `/chat/stream` | Enviar mensaje y recibir respuesta vía SSE (tokens, actividad, HITL) |
 | `GET` | `/hitl/pending` | Ver pendientes de HITL (admin) |
 | `POST` | `/hitl/{thread_id}/approve` | Aprobar acción (admin) |
 | `POST` | `/hitl/{thread_id}/reject` | Rechazar acción (admin) |
-| `GET` | `/stats` | Métricas de tracing |
+| `GET` | `/stats` | Métricas de tracing ampliadas (latencia p50/p95, bloques, HITL, series 24h) |
 | `GET` | `/health` | Health check de dependencias |
 | `GET` | `/me` | Info del usuario autenticado |
 
@@ -354,7 +356,7 @@ Defense rate: 100.0%
 - Email whitelist: solo dominios internos (`aegiscorp.com`, `aegis.com`)
 - SQL allowlist: tablas y columnas explícitas, solo `SELECT` (no `INSERT`, `UPDATE`, `DELETE`, `DROP`)
 - PII filter: enmascara emails, teléfonos, DNIs y otros datos sensibles en respuestas y traces
-- Rate limiting: 10 requests por 120s por usuario en `/chat`; 12 intentos de login/15 min por IP y por usuario
+- Rate limiting: 10 requests por 120s por usuario en `/chat` y `/chat/stream`; 12 intentos de login/15 min por IP y por usuario
 - RBAC: `empleado` (RAG + tickets + chat) vs `admin` (+ SQL + email)
 - JWT en cookie `HttpOnly` con expiración, issuer, audience y revocación en `/logout`
 - Traces con retención limitada: hashes de identificadores, redacción PII, rotación por edad/cantidad
