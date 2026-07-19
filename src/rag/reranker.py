@@ -12,9 +12,11 @@ from sentence_transformers import CrossEncoder
 if TYPE_CHECKING:
     from langchain_core.documents import Document
 
-# Modelo ligero del ecosistema sentence-transformers. Es mono-lingüe inglés pero
-# funciona razonablemente bien con español técnico; si en la medición final no
-# aporta, el flag `reranker_enabled` lo desactiva sin tocar código.
+# Modelo de cross-encoder del ecosistema sentence-transformers.
+# Se evaluó también mmarco-mMiniLMv2-L12-H384-v1 (multilingüe), pero en este
+# corpus español/técnico obtuvo peor MRR (0.9107 vs 0.9226) y mayor latencia
+# de carga (modelo ~471 MB vs ~86 MB). ms-marco-MiniLM funciona mejor con el
+# fallback híbrido implementado en retriever.py.
 _DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 # Singleton del modelo (cargado bajo demanda)
