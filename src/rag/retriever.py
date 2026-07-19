@@ -51,6 +51,7 @@ def _get_chroma_vectorstore() -> Chroma:
         persist_directory=str(CHROMA_DIR),
         embedding_function=embeddings,
         collection_name="aegis_docs",
+        collection_metadata={"hnsw:space": "cosine"},
     )
 
     return _vectorstore
