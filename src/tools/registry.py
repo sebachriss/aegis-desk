@@ -9,6 +9,7 @@ Para añadir una nueva herramienta:
   3. Añadirla al diccionario TOOLS
 """
 
+from src.tools.accesos import crear_accesos
 from src.tools.email import enviar_email
 from src.tools.sql import consultar_sql_tool
 from src.tools.tickets import buscar_ticket, crear_ticket, listar_tickets
@@ -29,6 +30,7 @@ TOOLS = {
     "consultar_saldo_vacaciones": consultar_saldo_vacaciones,
     "solicitar_vacaciones": solicitar_vacaciones,
     "listar_solicitudes_vacaciones": listar_solicitudes_vacaciones,
+    "crear_accesos": crear_accesos,
 }
 
 

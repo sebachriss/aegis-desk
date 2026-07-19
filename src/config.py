@@ -159,6 +159,11 @@ class Settings(BaseSettings):
         description="Activa reranking con cross-encoder",
     )
 
+    max_action_plan_steps: int = Field(
+        default=3,
+        description="Máximo número de pasos por plan multi-acción",
+    )
+
     # Configuración de pydantic-settings
     model_config = SettingsConfigDict(
         env_file=".env",

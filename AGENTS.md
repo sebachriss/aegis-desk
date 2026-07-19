@@ -125,13 +125,13 @@ python -m src.rag.ingest
 
 ## Estado de verificación final
 
-Tras el cierre de las fases de RAG avanzado (2026-07-19):
+Tras el cierre de multi-step/onboarding (2026-07-19):
 
-- `pytest tests/ -q` → 129 passed.
+- `pytest tests/ -q` → 153 passed.
 - `make retrieval-evals` → recall@1 85.71%, recall@3 100%, recall@5 100%, MRR 0.9226.
-- `python -m evals.run_evals --save` → 37/37 (100%).
-- `python -m redteam.run_redteam --save` → 46/46 (100%).
-- `make verify` (tests + compile + frontend build) OK.
+- `python -m evals.run_evals --save` → 43/43 (100%).
+- `python -m redteam.run_redteam --save` → 52/52 (100%).
+- `make full` (verify + evals + redteam) OK.
 
 Ver detalles en `PROGRESS.md`.
 

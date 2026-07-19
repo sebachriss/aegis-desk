@@ -1,7 +1,7 @@
 """Supervisor: clasifica la intención del usuario y enruta al agente correcto.
 
 Usa structured output para devolver:
-  - intencion: "rag", "datos", "accion", o "chat"
+  - intencion: "rag", "datos", "accion", "onboarding", o "chat"
   - confidence: 0.0 a 1.0
 
 El grafo usa este campo para decidir a qué nodo ir (conditional edge).
@@ -50,8 +50,15 @@ RAG_PATTERNS = [
     r"\b(salario|sueldo|nómina)\b",
     r"\b(pérdida de equipo|perdí|perdi.*(laptop|equipo)|rob(o|aron)|extrav(i|io))\b",
     r"\b(cómo solicito|cómo pido|cómo accedo|cómo reporto|qué hago si)\b",
+    r"\b(onboarding|bienvenida|día 1|primer día|inducción|buddy|proceso de alta)\b",
 ]
 _compiled_rag = [re.compile(p, re.IGNORECASE) for p in RAG_PATTERNS]
+
+# Patrones de ejecución de onboarding (alta de empleado).
+ONBOARDING_EXEC_PATTERNS = [
+    r"\b(dar de alta|alta de empleado|alta empleado|nuevo empleado|empleado nuevo|contratar a|incorporar a|ingresar a)\b",
+]
+_compiled_onboarding = [re.compile(p, re.IGNORECASE) for p in ONBOARDING_EXEC_PATTERNS]
 
 # Palabras que indican una orden de acción explícita.
 # Si aparecen junto a tickets/email/vacaciones/saldo, la intención es "accion".
@@ -92,16 +99,22 @@ def _is_rag_query(query: str) -> bool:
     return any(p.search(query) for p in _compiled_rag)
 
 
+def _is_onboarding_execution(query: str) -> bool:
+    """Heurística rápida: detecta peticiones para iniciar onboarding/alta de empleado."""
+    return any(p.search(query) for p in _compiled_onboarding)
+
+
 # Schema de salida — el LLM tiene que rellenar esto
 class ClasificacionSupervisor(BaseModel):
     """Clasificacion de la intencion del mensaje del usuario."""
 
-    intencion: Literal["rag", "datos", "accion", "chat"] = Field(
+    intencion: Literal["rag", "datos", "accion", "onboarding", "chat"] = Field(
         description=(
             "Categoria del mensaje:\n"
             "- rag: preguntas sobre politicas, manuales, FAQ de la empresa (documentos)\n"
             "- datos: consultas sobre datos en la base de datos (empleados, tickets, numeros)\n"
             "- accion: solicitudes de hacer algo (crear ticket, enviar email)\n"
+            "- onboarding: dar de alta a un nuevo empleado (ejecución, no consulta)\n"
             "- chat: saludos, conversacion general, o anything que no encaje en lo anterior"
         ),
     )
@@ -112,10 +125,10 @@ class ClasificacionSupervisor(BaseModel):
 
 SYSTEM_PROMPT = """Eres el supervisor de Aegis Desk, un sistema de soporte interno.
 
-Tu trabajo es clasificar la intención del mensaje del usuario en una de 4 categorías:
+Tu trabajo es clasificar la intención del mensaje del usuario en una de 5 categorías:
 
-- **rag**: El usuario pregunta sobre políticas, manuales, procedimientos, FAQ de la empresa, o cómo hacer algo dentro de la empresa (equipos, contraseñas, teletrabajo, vacaciones, pérdida de equipo).
-  Ej: "¿Cuántos días de vacaciones tengo?", "¿Cómo reseteo mi contraseña?", "¿Puedo traer a mi mascota?", "¿Cómo solicito un equipo nuevo?", "¿Qué hago si pierdo mi laptop?"
+- **rag**: El usuario pregunta sobre políticas, manuales, procedimientos, FAQ de la empresa, o cómo hacer algo dentro de la empresa (equipos, contraseñas, teletrabajo, vacaciones, pérdida de equipo, proceso de onboarding).
+  Ej: "¿Cuántos días de vacaciones tengo?", "¿Cómo reseteo mi contraseña?", "¿Puedo traer a mi mascota?", "¿Cómo solicito un equipo nuevo?", "¿Qué hago si pierdo mi laptop?", "¿Cómo es el proceso de onboarding?"
 
 - **datos**: El usuario pregunta sobre datos que están en la base de datos SQL (empleados, departamentos, números, estadísticas, presupuestos).
   Ej: "¿Cuántos empleados hay?", "¿Quién gana más en Ventas?", "¿Cuál es el presupuesto de IT?"
@@ -125,14 +138,19 @@ Tu trabajo es clasificar la intención del mensaje del usuario en una de 4 categ
   Ej: "Crea un ticket de alta prioridad", "Envía un email a RRHH", "Lista los tickets abiertos", "Busca el ticket 1", "Quiero solicitar vacaciones del 1 al 5 de agosto", "¿Cuál es mi saldo de vacaciones?"
   Una frase como "Pérdida de laptop" o "Mi laptop no funciona" es una consulta de información (rag) a menos que diga explícitamente "crea un ticket" o "reporta".
 
+- **onboarding**: El usuario pide DAR DE ALTA a un nuevo empleado (ejecución). Solo se usa cuando hay intención explícita de alta/incorporación, NO cuando pregunta por el proceso.
+  Ej: "Dar de alta a Pedro Gómez (pedro@aegiscorp.com) en Ventas", "Nuevo empleado en el equipo de IT", "Alta de empleado"
+  Si pregunta "¿cómo es el proceso de onboarding?" o "¿qué pasa el día 1?" es **rag**.
+
 - **chat**: Saludos, conversación general, o preguntas que no encajan en las anteriores.
   Ej: "Hola", "¿Qué tal?", "Gracias"
 
 Reglas clave:
-1. Si la pregunta busca información documentada (políticas, manuales, FAQ, procedimientos), es **rag**.
+1. Si la pregunta busca información documentada (políticas, manuales, FAQ, procedimientos, onboarding como proceso), es **rag**.
 2. Si la pregunta menciona "tickets", "email", "vacaciones", "saldo" o pide explícitamente "crea"/"envía"/"lista"/"busca"/"solicita"/"consulta", es **accion**.
 3. "¿Cuál es la política de vacaciones?" es **rag** (pregunta por normativa). "¿Cuál es mi saldo de vacaciones?" o "Quiero solicitar vacaciones" es **accion**.
 4. Solo es **datos** si pregunta por empleados, departamentos, presupuestos o números de la DB.
+5. "Dar de alta", "alta de empleado", "nuevo empleado" con datos concretos (nombre/email/depto) es **onboarding**. Preguntas sobre el proceso son **rag**.
 
 Responde solo con la clasificación en formato JSON. No respondas la pregunta del usuario.
 """
@@ -156,17 +174,10 @@ def supervisor_node(state: AgentState) -> dict:
             "confidence": 1.0,
         }
 
-    # Fast path: órdenes de acción sobre tickets/email
-    if _is_action_query(query):
+    # Fast path: ejecución de onboarding (alta) tiene prioridad
+    if _is_onboarding_execution(query):
         return {
-            "intencion": "accion",
-            "confidence": 0.95,
-        }
-
-    # Fast path: consultas de datos obvias tienen prioridad
-    if _is_data_query(query):
-        return {
-            "intencion": "datos",
+            "intencion": "onboarding",
             "confidence": 0.95,
         }
 
@@ -185,7 +196,7 @@ def supervisor_node(state: AgentState) -> dict:
         }
 
     # Fast path: consultas de RAG obvias por palabras clave
-    if _is_rag_query(query) and not re.search(r"\b(crea|crear|envía|enviar|lista|listar|busca|buscar)\b", query, re.IGNORECASE):
+    if _is_rag_query(query) and not re.search(r"\b(crea|crear|envía|enviar|lista|listar|busca|buscar|solicita|solicitar|pide|pedir)\b", query, re.IGNORECASE):
         return {
             "intencion": "rag",
             "confidence": 0.95,

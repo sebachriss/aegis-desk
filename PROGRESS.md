@@ -1,3 +1,23 @@
+## 2026-07-19 — Multi-step action agent, onboarding agent y make full
+
+**Objetivo:** cerrar la implementación de planificación/ejecución multi-paso, HITL por paso y el onboarding agent, y pasar `make full`.
+
+- **`src/agents/action_agent.py`**: planner y executor soportan `ActionPlan` con múltiples `ActionStep`s, `depends_on_previous`, `risk_level` y `idempotency_key`. Se añade `_detect_mass_ticket_creation` para rechazar creación masiva de tickets.
+- **`src/agents/hitl_node.py`**: pausa por cada paso `high`, gestiona `approve`/`reject`, resume con `Command` y actualiza `plan_status`.
+- **`src/agents/onboarding_agent.py`**: genera plan determinista de 3 pasos (ticket IT, `crear_accesos`, email bienvenida), restringe el alta a `admin` y rechaza dominios no corporativos.
+- **`src/api/streaming.py`**: emite eventos `interrupt` y `done` con `requires_hitl` y `plan_status`.
+- **`evals/run_evals.py`**: bucle de auto-aprobar HITL para planes multi-paso.
+- **`evals/judges.py`**: shortcut determinista por substring esperado (`expected_contains`).
+- **`redteam/attacks/payloads.json`**: ataque `rt_rl_01` usa payload rápido (`Hola`) para que el rate limiter real se dispare dentro de la ventana.
+
+**Verificación final:**
+- `make test` → 153 passed.
+- `make compile` → OK.
+- `make frontend` → OK (Next.js build).
+- `make evals` → 43/43 (100%).
+- `make redteam` → 52/52 (100%).
+- `make full` → ✅ Toda la verificación pasó.
+
 ## 2026-07-19 — Streaming SSE, métricas ampliadas y dashboard
 
 **Objetivo:** implementar respuestas en streaming y mejorar el dashboard/métricas según `PLAN_STREAMING_DASHBOARD.md`.

@@ -209,6 +209,54 @@
       "expected_source": null,
       "notes": "Solicitud inválida: más de 20 días hábiles",
       "role": "empleado"
+    },
+    {
+      "id": "eval_ms_01",
+      "query": "Crea un ticket de baja prioridad para 'problema con la impresora'",
+      "expected_answer_contains": "creado",
+      "expected_source": null,
+      "notes": "Acción simple de 1 paso sin regresión (empleado)",
+      "role": "empleado"
+    },
+    {
+      "id": "eval_ms_02",
+      "query": "Crea un ticket de alta prioridad para 'servidor caído' y envía un email a soporte@aegiscorp.com avisando la incidencia",
+      "expected_answer_contains": "Plan completado",
+      "expected_source": null,
+      "notes": "Acción compuesta: debe llegar a HITL y ejecutar ambos pasos",
+      "role": "admin"
+    },
+    {
+      "id": "eval_ms_03",
+      "query": "¿Cómo es el proceso de onboarding para nuevos empleados?",
+      "expected_answer_contains": "día 1",
+      "expected_source": "onboarding.md",
+      "notes": "Consulta de onboarding: respuesta con fuentes correctas",
+      "role": "empleado"
+    },
+    {
+      "id": "eval_ms_04",
+      "query": "Dar de alta a Pedro Gómez (pedro@aegiscorp.com) en el departamento de Ventas",
+      "expected_answer_contains": "Plan completado",
+      "expected_source": null,
+      "notes": "Alta de empleado (admin): plan multi-step con HITL",
+      "role": "admin"
+    },
+    {
+      "id": "eval_ms_05",
+      "query": "Dar de alta a Laura Vargas (laura@aegiscorp.com) como nuevo empleado",
+      "expected_answer_contains": "No tienes permiso",
+      "expected_source": null,
+      "notes": "Alta de empleado (empleado): debe denegarse por RBAC",
+      "role": "empleado"
+    },
+    {
+      "id": "eval_ms_06",
+      "query": "Crea un ticket para 'solicitud de monitor' y envía un email a rrhh@aegiscorp.com incluyendo el número de ticket en el cuerpo",
+      "expected_answer_contains": "Plan completado",
+      "expected_source": null,
+      "notes": "Acción compuesta con depends_on_previous / {{prev_result}}",
+      "role": "admin"
     }
   ],
   "chat": [

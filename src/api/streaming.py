@@ -28,6 +28,7 @@ NODE_LABELS = {
     "rag_agent": "Buscando en documentos...",
     "data_agent": "Consultando datos...",
     "action_planner": "Planificando acción...",
+    "onboarding_agent": "Preparando onboarding...",
     "chat_agent": "Generando respuesta...",
     "critic": "Revisando respuesta...",
     "hitl_review": "Esperando aprobación...",
@@ -100,9 +101,13 @@ async def stream_chat_events(
     state: dict[str, Any] = dict(inputs)
     final_state: dict[str, Any] | None = None
     interrupted = False
-    interrupt_value: Any = None
     traced = False
     emitted_nodes: set[str] = set()
+
+    def _interrupt_resumen(iv: Any) -> str:
+        if isinstance(iv, tuple) and iv:
+            iv = iv[0]
+        return iv.value if isinstance(iv, Interrupt) else "Acción requiere aprobación humana."
 
     try:
         async with asyncio.timeout(timeout):
@@ -122,7 +127,18 @@ async def stream_chat_events(
                     interrupts = part.get("interrupts") or data.get("__interrupt__")
                     if interrupts:
                         interrupted = True
-                        interrupt_value = interrupts
+                        # Persistir el flag en el estado para que el done final refleje HITL.
+                        state["__interrupt__"] = interrupts
+                        resumen = _interrupt_resumen(interrupts)
+                        yield _sse("interrupt", {"thread_id": thread_id, "resumen": str(resumen)})
+                        await asyncio.to_thread(
+                            hitl_db.enqueue,
+                            thread_id,
+                            query=query,
+                            intencion=state.get("intencion") or "accion",
+                            action_plan=state.get("action_plan"),
+                            user=user,
+                        )
 
                 # updates: nodo completado + actualización parcial de estado.
                 elif part_type == "updates" and isinstance(data, dict):
@@ -194,45 +210,40 @@ async def stream_chat_events(
         traced = True
         return
 
-    # Usa el estado final si está disponible; si no, el acumulado.
+    # Usa el snapshot final del grafo si está disponible, pero sin perder flags
+    # que ya se detectaron durante el stream (p. ej. __interrupt__).
     if isinstance(final_state, dict):
-        state = final_state
+        state.update(final_state)
 
-    # HITL: el grafo se interrumpió
-    if interrupted or state.get("__interrupt__"):
-        interrupted = True
-        iv = interrupt_value or state.get("__interrupt__")
-        if isinstance(iv, tuple) and iv:
-            iv = iv[0]
-        resumen = iv.value if isinstance(iv, Interrupt) else "Acción requiere aprobación humana."
+    plan_status = None
+    action_plan = state.get("action_plan")
+    if isinstance(action_plan, dict):
+        plan_status = action_plan.get("plan_status")
 
-        await asyncio.to_thread(
-            hitl_db.enqueue,
-            thread_id,
-            query=query,
-            intencion=state.get("intencion") or "accion",
-            action_plan=state.get("action_plan"),
-            user=user,
-        )
-
-        yield _sse("interrupt", {"thread_id": thread_id, "resumen": str(resumen)})
+    # HITL: el grafo se pausó en algún punto del stream.
+    # En streaming LangGraph puede reportar la interrupción vía __interrupt__ en
+    # el snapshot, vía part["interrupts"], o ambas. Si el plan ya quedó
+    # completado en el snapshot final, no consideramos la interrupción pendiente.
+    is_interrupted = bool(state.get("__interrupt__")) or (interrupted and plan_status != "completed")
 
     # Prepara respuesta final
-    raw_respuesta = state.get("respuesta", "")
-    if interrupted:
+    if is_interrupted:
         raw_respuesta = "⏸️ Tu solicitud requiere aprobación humana. Pendiente de revisión."
+    else:
+        raw_respuesta = state.get("respuesta", "")
 
     respuesta_filtrada, _ = filter_pii(raw_respuesta)
     elapsed = time.time() - start
 
     done_payload = {
         "thread_id": thread_id,
-        "intencion": state.get("intencion") or ("" if not interrupted else "accion"),
+        "intencion": state.get("intencion") or ("accion" if is_interrupted else ""),
         "respuesta": respuesta_filtrada,
         "confidence": state.get("confidence", 0.0),
         "fuentes": state.get("fuentes", []),
         "elapsed_seconds": round(elapsed, 2),
-        "requires_hitl": interrupted,
+        "requires_hitl": is_interrupted,
+        "plan_status": plan_status,
     }
     yield _sse("done", done_payload)
 
@@ -240,7 +251,7 @@ async def stream_chat_events(
     if not traced:
         trace_intencion = state.get("intencion") or "chat"
         trace_respuesta = respuesta_filtrada
-        if interrupted:
+        if is_interrupted:
             trace_respuesta = "⏸️ HITL pendiente de aprobacion"
             trace_intencion = state.get("intencion") or "accion"
         await asyncio.to_thread(

@@ -122,6 +122,16 @@ def judge_response(
                 categoria="incorrecta",
             )
 
+    # Validación determinista de substring esperado.
+    # Si la respuesta contiene exactamente el texto esperado (case-insensitive),
+    # se considera correcta sin necesidad de llamar al LLM juez.
+    if expected_contains and expected_contains.lower() in response.lower():
+        return EvaluacionJuez(
+            score=1.0,
+            razon=f"La respuesta contiene el texto esperado: '{expected_contains}'.",
+            categoria="correcta",
+        )
+
     llm = get_llm(temperature=0)
     llm_juez = llm.with_structured_output(EvaluacionJuez)
 
