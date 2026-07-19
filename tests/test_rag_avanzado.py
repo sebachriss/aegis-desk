@@ -1,4 +1,4 @@
-"""Tests deterministas para RAG avanzado (Fase 3).
+"""Tests deterministas para RAG avanzado (Fase 3 y 4).
 
 Usan Chroma/BM25 local y embeddings locales; no requieren red.
 """
@@ -20,7 +20,18 @@ get_settings.cache_clear()
 import pytest
 from langchain_core.documents import Document
 
-from src.rag import lexical
+from src.rag import lexical, reranker
+
+
+def _mock_settings(hybrid: bool = True, rerank: bool = False):
+    """Crea un settings de prueba sin acceso a red."""
+    from src.config import Settings
+
+    return Settings(
+        hybrid_search_enabled=hybrid,
+        reranker_enabled=rerank,
+        deepinfra_api_key="",
+    )
 
 
 class TestRRF:
@@ -91,6 +102,27 @@ class TestBM25:
             lexical._bm25_index = old_index
 
 
+class TestReranker:
+    def test_rerank_returns_sorted_scores(self, monkeypatch):
+        fake_model = MagicMock()
+        fake_model.predict.return_value = [0.5, 2.5, -1.0]
+        monkeypatch.setattr(reranker, "_cross_encoder", fake_model)
+
+        chunks = [
+            Document(page_content="foo", metadata={}),
+            Document(page_content="bar", metadata={}),
+            Document(page_content="baz", metadata={}),
+        ]
+        result = reranker.rerank("query", chunks, top_k=2)
+        assert len(result) == 2
+        # Mayor score raw -> mayor sigmoid
+        assert result[0][0] == 1
+        assert result[0][1] >= result[1][1]
+
+    def test_rerank_empty_chunks(self):
+        assert reranker.rerank("query", []) == []
+
+
 class TestRetrieverHybrid:
     def _fake_chunks(self):
         return [
@@ -106,6 +138,7 @@ class TestRetrieverHybrid:
         monkeypatch.setattr(retriever_module, "_dense_candidates", lambda query, k: [0, 1])
         monkeypatch.setattr(retriever_module.lexical, "search_lexical", lambda query, k: [1, 2])
         monkeypatch.setattr(retriever_module.lexical, "get_index_chunks", self._fake_chunks)
+        monkeypatch.setattr(retriever_module, "get_settings", lambda: _mock_settings(hybrid=True, rerank=False))
 
         result = retriever_module.search("vacaciones", k=3)
         assert isinstance(result, list)
@@ -119,21 +152,21 @@ class TestRetrieverHybrid:
         monkeypatch.setattr(retriever_module, "_dense_candidates", lambda query, k: [0, 1, 2, 3])
         monkeypatch.setattr(retriever_module.lexical, "search_lexical", lambda query, k: [3, 2, 1, 0])
         monkeypatch.setattr(retriever_module.lexical, "get_index_chunks", self._fake_chunks)
+        monkeypatch.setattr(retriever_module, "get_settings", lambda: _mock_settings(hybrid=True, rerank=False))
 
         result = retriever_module.search("equipos", k=2)
         assert len(result) <= 2
 
     def test_hybrid_disabled_equals_dense(self, monkeypatch):
+        # Con HYBRID desactivado no se usa BM25: el resultado debe seguir siendo
+        # una lista de chunks válida (aunque potencialmente vacía por umbral).
         import src.rag.retriever as retriever_module
-        from src.config import Settings
-
-        mock_settings = Settings(hybrid_search_enabled=False, deepinfra_api_key="")
-        monkeypatch.setattr(retriever_module, "get_settings", lambda: mock_settings)
 
         fake_doc = Document(page_content="vacaciones 22 días", metadata={"source": "vacaciones.md"})
         fake_store = MagicMock()
         fake_store.similarity_search_with_score.return_value = [(fake_doc, 0.2)]
         monkeypatch.setattr(retriever_module, "_get_chroma_vectorstore", lambda: fake_store)
+        monkeypatch.setattr(retriever_module, "get_settings", lambda: _mock_settings(hybrid=False, rerank=False))
 
         result = retriever_module.search("vacaciones", k=3)
         assert isinstance(result, list)

@@ -17,13 +17,14 @@ from src.db.pinecone_store import is_pinecone_configured, search as pinecone_sea
 from src.db.supabase_vector import is_supabase_vector_configured, search as supabase_search
 from src.rag.embeddings import get_embeddings
 from src.rag.ingest import CHROMA_DIR
-from src.rag import lexical
+from src.rag import lexical, reranker
 
 # Singleton del vectorstore (se carga una sola vez)
 _vectorstore: Chroma | None = None
 
-# Umbral de relevancia: chunks con score final menor son descartados
-RELEVANCE_THRESHOLD = 0.3
+# Umbrales de relevancia
+RELEVANCE_THRESHOLD = 0.3  # para scores RRF / dense
+RERANK_THRESHOLD = 0.5     # para scores sigmoid del cross-encoder
 
 # Constante RRF y número de candidatos por vía
 RRF_K = 60
@@ -98,8 +99,15 @@ def _dense_candidates(query: str, k: int = _CANDIDATES) -> list[int]:
 
 
 def _chunk_to_result(chunk: "Document", score: float) -> dict:
-    """Convierte un Document de langchain al dict usado por el retriever."""
+    """Convierte un Document de langchain al dict usado por el retriever.
+
+    Incluye la sección del documento en el campo `source` cuando está
+    disponible (formato: "doc.md § Sección").
+    """
     source = chunk.metadata.get("source", "desconocido")
+    section = chunk.metadata.get("header_2") or chunk.metadata.get("header_1")
+    if section and isinstance(section, str):
+        source = f"{source} § {section}"
     return {
         "content": chunk.page_content,
         "source": source,
@@ -162,11 +170,67 @@ def search(query: str, k: int = 3) -> list[dict]:
 
         index_chunks = lexical.get_index_chunks()
 
+        # Reranking opcional con cross-encoder
+        hybrid_sorted_ids = sorted_ids
+        hybrid_id_to_score = id_to_score
+        if settings.reranker_enabled:
+            # Tomar los top _CANDIDATES candidatos híbridos para rerankear
+            candidate_ids = sorted_ids[:_CANDIDATES]
+            candidate_chunks = [index_chunks[i] for i in candidate_ids]
+            reranked = reranker.rerank(query, candidate_chunks, top_k=_CANDIDATES)
+
+            # Mapear índices locales del rerank a ids reales y reordenar
+            reranked_scores: dict[int, float] = {}
+            for local_idx, score in reranked:
+                real_id = candidate_ids[local_idx]
+                reranked_scores[real_id] = score
+
+            sorted_ids = sorted(
+                reranked_scores.keys(),
+                key=lambda i: (-reranked_scores[i], hybrid_sorted_ids.index(i)),
+            )
+            id_to_score = {i: round(reranked_scores[i], 4) for i in sorted_ids}
+            threshold = RERANK_THRESHOLD
+        else:
+            threshold = RELEVANCE_THRESHOLD
+
         accepted_ids = [
             doc_id for doc_id in sorted_ids
-            if id_to_score[doc_id] >= RELEVANCE_THRESHOLD
+            if id_to_score[doc_id] >= threshold
         ]
-        discarded = len(sorted_ids) - len(accepted_ids)
+
+        # Guardar la lista aceptada por el reranker para contar descartes.
+        rerank_accepted = accepted_ids[:]
+
+        # Fallback: si el cross-encoder descarta todo, o si deja menos de k
+        # resultados, completar con la lista híbrida. Esto evita perder
+        # respuestas cuando el reranker es demasiado conservador
+        # (p. ej. queries en inglés con un modelo mono-lingüe).
+        if hybrid_sorted_ids:
+            if not accepted_ids:
+                sorted_ids = hybrid_sorted_ids
+                id_to_score = hybrid_id_to_score
+                accepted_ids = [
+                    doc_id for doc_id in sorted_ids
+                    if id_to_score[doc_id] >= RELEVANCE_THRESHOLD
+                ]
+
+            # Completar hasta k con candidatos híbridos que no estén ya
+            # seleccionados (sin umbral si es necesario).
+            seen = set(accepted_ids)
+            for doc_id in hybrid_sorted_ids:
+                if doc_id in seen:
+                    continue
+                if len(accepted_ids) >= k:
+                    break
+                accepted_ids.append(doc_id)
+                seen.add(doc_id)
+
+            # Si todavía no tenemos nada, devolvemos el top híbrido sin filtro
+            if not accepted_ids:
+                accepted_ids = hybrid_sorted_ids[:k]
+
+        discarded = max(0, len(sorted_ids) - len(rerank_accepted))
         top_ids = accepted_ids[:k]
 
         top_chunks = [_chunk_to_result(index_chunks[i], id_to_score[i]) for i in top_ids]

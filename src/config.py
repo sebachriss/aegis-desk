@@ -155,7 +155,7 @@ class Settings(BaseSettings):
     )
 
     reranker_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Activa reranking con cross-encoder",
     )
 
