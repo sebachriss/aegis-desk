@@ -1,0 +1,228 @@
+{
+  "cases": [
+    {
+      "id": "ret_01",
+      "query": "¿Cuántos días de vacaciones tengo al año?",
+      "expected_sources": ["vacaciones.md", "politica_rrhh.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Pregunta directa sobre vacaciones"
+    },
+    {
+      "id": "ret_02",
+      "query": "¿Cómo reseteo mi contraseña?",
+      "expected_sources": ["manual_it.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Procedimiento de IT"
+    },
+    {
+      "id": "ret_03",
+      "query": "Pet Fridays",
+      "expected_sources": ["beneficios.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Beneficio específico"
+    },
+    {
+      "id": "ret_04",
+      "query": "¿Cuándo se pagan los salarios?",
+      "expected_sources": ["faq.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Día de pago"
+    },
+    {
+      "id": "ret_05",
+      "query": "solicitar un equipo nuevo",
+      "expected_sources": ["manual_it.md", "uso_equipos.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Solicitud de equipos"
+    },
+    {
+      "id": "ret_06",
+      "query": "pérdida o robo de laptop",
+      "expected_sources": ["uso_equipos.md", "manual_it.md", "seguridad_informacion.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Pérdida de equipo"
+    },
+    {
+      "id": "ret_07",
+      "query": "horario laboral flexible",
+      "expected_sources": ["politica_rrhh.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Horario"
+    },
+    {
+      "id": "ret_08",
+      "query": "feedback 360 evaluación",
+      "expected_sources": ["evaluacion_desempeno.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Evaluación de desempeño"
+    },
+    {
+      "id": "ret_09",
+      "query": "política de teletrabajo",
+      "expected_sources": ["teletrabajo.md", "politica_rrhh.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Teletrabajo"
+    },
+    {
+      "id": "ret_10",
+      "query": "seguro médico y bienestar",
+      "expected_sources": ["beneficios.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Beneficios de salud"
+    },
+    {
+      "id": "ret_11",
+      "query": "código de conducta anti-acoso",
+      "expected_sources": ["codigo_conducta.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Código de conducta"
+    },
+    {
+      "id": "ret_12",
+      "query": "licencia por maternidad semanas",
+      "expected_sources": ["licencias_medicas.md", "politica_rrhh.md", "vacaciones.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Licencia por maternidad"
+    },
+    {
+      "id": "ret_13",
+      "query": "gastos reembolsables y viáticos",
+      "expected_sources": ["gastos_viaticos.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Gastos y viáticos"
+    },
+    {
+      "id": "ret_14",
+      "query": "reservar sala de reuniones",
+      "expected_sources": ["salas_reuniones.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Salas de reuniones"
+    },
+    {
+      "id": "ret_15",
+      "query": "phishing correo sospechoso",
+      "expected_sources": ["seguridad_informacion.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Seguridad de la información"
+    },
+    {
+      "id": "ret_16",
+      "query": "onboarding día 1 nuevos empleados",
+      "expected_sources": ["onboarding.md", "manual_it.md"],
+      "k": 3,
+      "category": "easy",
+      "notes": "Onboarding"
+    },
+    {
+      "id": "ret_17",
+      "query": "días libres por enfermedad",
+      "expected_sources": ["licencias_medicas.md"],
+      "k": 5,
+      "category": "ambiguous",
+      "notes": "Distingue licencias médicas de vacaciones"
+    },
+    {
+      "id": "ret_18",
+      "query": "cuidado y mantenimiento de equipos",
+      "expected_sources": ["uso_equipos.md"],
+      "k": 5,
+      "category": "ambiguous",
+      "notes": "Uso de equipos vs seguridad de equipos"
+    },
+    {
+      "id": "ret_19",
+      "query": "trabajo remoto desde casa",
+      "expected_sources": ["teletrabajo.md"],
+      "k": 5,
+      "category": "ambiguous",
+      "notes": "Teletrabajo vs trabajo remoto"
+    },
+    {
+      "id": "ret_20",
+      "query": "cómo se calibran las evaluaciones de desempeño",
+      "expected_sources": ["evaluacion_desempeno.md"],
+      "k": 5,
+      "category": "ambiguous",
+      "notes": "Evaluación específica"
+    },
+    {
+      "id": "ret_21",
+      "query": "reuniones híbridas equipos audiovisuales",
+      "expected_sources": ["salas_reuniones.md"],
+      "k": 5,
+      "category": "ambiguous",
+      "notes": "Salas y reuniones híbridas"
+    },
+    {
+      "id": "ret_22",
+      "query": "cifrado de datos y contraseñas",
+      "expected_sources": ["seguridad_informacion.md"],
+      "k": 5,
+      "category": "ambiguous",
+      "notes": "Seguridad de la información"
+    },
+    {
+      "id": "ret_23",
+      "query": "vacasiones anuales",
+      "expected_sources": ["vacaciones.md", "politica_rrhh.md"],
+      "k": 5,
+      "category": "typo",
+      "notes": "Vacaciones con typo"
+    },
+    {
+      "id": "ret_24",
+      "query": "teletravajo máximo días",
+      "expected_sources": ["teletrabajo.md"],
+      "k": 5,
+      "category": "typo",
+      "notes": "Teletrabajo con typo"
+    },
+    {
+      "id": "ret_25",
+      "query": "solicito un aumento de sueldo",
+      "expected_sources": ["faq.md", "evaluacion_desempeno.md"],
+      "k": 5,
+      "category": "typo",
+      "notes": "Aumento de sueldo"
+    },
+    {
+      "id": "ret_26",
+      "query": "how many vacation days do I have?",
+      "expected_sources": ["vacaciones.md", "politica_rrhh.md"],
+      "k": 5,
+      "category": "english",
+      "notes": "Consulta en inglés sobre vacaciones"
+    },
+    {
+      "id": "ret_27",
+      "query": "how do I reset my password?",
+      "expected_sources": ["manual_it.md"],
+      "k": 5,
+      "category": "english",
+      "notes": "Consulta en inglés sobre contraseña"
+    },
+    {
+      "id": "ret_28",
+      "query": "remote work policy",
+      "expected_sources": ["teletrabajo.md"],
+      "k": 5,
+      "category": "english",
+      "notes": "Consulta en inglés sobre teletrabajo"
+    }
+  ]
+}

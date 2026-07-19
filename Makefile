@@ -22,6 +22,9 @@ frontend: ## Instala dependencias, lint y build del frontend
 evals: ## Corre suite de evaluaciones (requiere API keys)
 	$(PYTHON_BIN) -m evals.run_evals --save
 
+retrieval-evals: ## Mide recall@k/MRR del retriever (sin LLM)
+	DEEPINFRA_API_KEY= DATABASE_URL= SUPABASE_URL= SUPABASE_KEY= SUPABASE_SERVICE_KEY= PINEONE_API_KEY= $(PYTHON) -m evals.run_retrieval_evals --save
+
 redteam: ## Corre suite de red teaming (requiere API keys)
 	$(PYTHON_BIN) -m redteam.run_redteam --save
 
