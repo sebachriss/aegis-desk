@@ -149,6 +149,16 @@ class Settings(BaseSettings):
         description="Timeout máximo para una invocación de /chat",
     )
 
+    hybrid_search_enabled: bool = Field(
+        default=True,
+        description="Activa hybrid search (BM25 + dense con RRF)",
+    )
+
+    reranker_enabled: bool = Field(
+        default=False,
+        description="Activa reranking con cross-encoder",
+    )
+
     # Configuración de pydantic-settings
     model_config = SettingsConfigDict(
         env_file=".env",

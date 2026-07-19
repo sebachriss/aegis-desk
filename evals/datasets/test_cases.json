@@ -53,7 +53,7 @@
       "id": "rag_08",
       "query": "¿Cómo se evalúa mi desempeño?",
       "expected_answer_contains": "evaluación",
-      "expected_source": "politica_rrhh.md",
+      "expected_source": "politica_rrhh.md, evaluacion_desempeno.md",
       "notes": "Evaluación de desempeño"
     },
     {

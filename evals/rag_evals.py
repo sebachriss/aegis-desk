@@ -132,9 +132,11 @@ def evaluate_context_precision(pregunta: str, k: int = 3) -> ContextPrecisionSco
     results = search(pregunta, k=k)
 
     chunks_text = ""
-    for i, (doc, score) in enumerate(results):
+    for i, doc in enumerate(results):
+        score = doc.get("score", 0.0)
+        content = doc.get("content", doc.get("text", str(doc)))
         chunks_text += f"\n--- Chunk {i+1} (score: {score:.4f}) ---\n"
-        chunks_text += doc.page_content
+        chunks_text += content
 
     if not chunks_text.strip():
         chunks_text = "(No se recuperaron chunks)"
