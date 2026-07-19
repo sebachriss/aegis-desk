@@ -59,7 +59,7 @@ La empresa cuenta con 50 plazas de estacionamiento asignadas por orden de solici
 Además de las vacaciones anuales, Aegis Corp otorga licencias pagadas por situaciones especiales:
 
 - Licencia por matrimonio: 5 días laborables.
-- Licencia por fallecimiento de familiar directo: 3 días laborables.
+- Licencia por fallecimiento de familiar directo (cónyuge, conviviente, padres, hijos o hermanos): 5 días laborables. Para abuelos, nietos o suegros: 3 días laborables.
 - Licencia por mudanza: 1 día laborable por año, previa justificación.
 - Licencia por nacimiento de hijo, en complemento a la licencia por paternidad: 2 días adicionales.
 
