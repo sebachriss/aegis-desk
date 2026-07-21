@@ -64,8 +64,6 @@ INJECTION_PATTERNS = [
     r"\bINSERT\s+INTO\b",
     r"\bUPDATE\s+\w+\s+SET\b",
     r"\bALTER\s+TABLE\b.*\bDROP\b",
-    r"\bUNION\b.*\bSELECT\b",
-    r"\bSELECT\b.*\bpassword\b.*\bFROM\b",
 
     # Bypass de HITL / replay de acciones
     r"vuelve\s+a\s+ejecutar",

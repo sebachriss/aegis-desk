@@ -189,18 +189,6 @@ def main() -> None:
             )
             cur.execute(
                 """
-                CREATE TABLE IF NOT EXISTS accesos (
-                    id SERIAL PRIMARY KEY,
-                    email TEXT,
-                    sistema TEXT,
-                    estado TEXT,
-                    otorgado_por TEXT,
-                    created_at TEXT
-                )
-                """
-            )
-            cur.execute(
-                """
                 CREATE TABLE IF NOT EXISTS hitl_queue (
                     thread_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL DEFAULT 'pending',

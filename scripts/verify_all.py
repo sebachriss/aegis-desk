@@ -61,7 +61,7 @@ def check_evals_baseline() -> int:
     if not report:
         print("⚠️  No se encontró reporte de evals. Saltando chequeo de baseline.")
         return 0
-    pass_rate = report.get("overall_pass_rate") or report.get("pass_rate") or report.get("score")
+    pass_rate = report.get("pass_rate") or report.get("score")
     baseline = report.get("baseline", {}).get("pass_rate", 1.0)
     print(f"Evals pass_rate={pass_rate} baseline={baseline}")
     if pass_rate is not None and pass_rate < baseline:

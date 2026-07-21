@@ -198,22 +198,8 @@ def _validate_hitl_thread(thread_id: str):
     if "hitl_review" not in state.next:
         raise HTTPException(status_code=409, detail="El thread no esta pausado en HITL")
 
-    from src.agents.action_agent import normalize_action_plan
-
-    action_plan = normalize_action_plan(state.values.get("action_plan")) if state.values else None
-    if not action_plan:
-        raise HTTPException(
-            status_code=409, detail="No hay una accion pendiente de aprobacion en este thread"
-        )
-
-    # Para planes multi-paso, buscar al menos un paso high pendiente.
-    has_pending = False
-    current = action_plan.get("current_step", 0)
-    for step in action_plan.get("steps", [])[current:]:
-        if step.get("approval_status") == "pending" and step.get("risk_level") == "high":
-            has_pending = True
-            break
-    if not has_pending and action_plan.get("approval_status") != "pending":
+    action_plan = state.values.get("action_plan") if state.values else None
+    if not action_plan or action_plan.get("approval_status") != "pending":
         raise HTTPException(
             status_code=409, detail="No hay una accion pendiente de aprobacion en este thread"
         )

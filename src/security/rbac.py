@@ -32,14 +32,13 @@ ROLE_PERMISSIONS = {
         "listar_solicitudes_vacaciones",
         "enviar_email",
         "consultar_sql",
-        "crear_accesos",
     ],
 }
 
 # Intenciones permitidas por rol (qué workers puede usar)
 ROLE_INTENTIONS = {
-    "empleado": ["rag", "accion", "chat", "onboarding"],
-    "admin": ["rag", "datos", "accion", "chat", "onboarding"],
+    "empleado": ["rag", "accion", "chat"],
+    "admin": ["rag", "datos", "accion", "chat"],
 }
 
 

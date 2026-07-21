@@ -1,14 +1,11 @@
 """Grafo multi-agente: ensambla seguridad + supervisor + workers + critico + HITL en LangGraph.
 
 Estructura:
-  START -> security -> supervisor -> (rag | datos | accion | chat | onboarding) -> critico -> (END | reintento | hitl)
+  START -> security -> supervisor -> (rag | datos | accion | chat) -> critico -> (END | reintento | hitl)
               |                                                                          |
          bloqueado -> END                                                           hitl_review
                                                                                         |
                                                                                 action_executor -> END
-
-Para planes multi-paso, action_executor puede hacer loop con hitl_review
-hasta completar todos los pasos o fallar.
 
 Fase 1 (SEC-01): RBAC real de tools. Los workers reciben solo las tools permitidas por rol.
 Fase 2 (SEC-02): separa action_planner de action_executor. Acciones de alto riesgo pasan
@@ -18,16 +15,11 @@ por HITL antes de ejecutarse. La deteccion de HITL ya no depende de frases del L
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from src.agents.action_agent import (
-    action_executor_node,
-    action_planner_node,
-    normalize_action_plan,
-)
+from src.agents.action_agent import action_executor_node, action_planner_node
 from src.agents.chat_agent import chat_node
 from src.agents.critic_agent import critic_node
 from src.agents.data_agent import data_node
 from src.agents.hitl_node import hitl_node
-from src.agents.onboarding_agent import onboarding_node
 from src.agents.rag_agent import rag_node
 from src.agents.security_node import security_node
 from src.agents.state import AgentState
@@ -69,7 +61,6 @@ def route_from_supervisor(state: AgentState) -> str:
         "datos": "data_agent",
         "accion": "action_planner",
         "chat": "chat_agent",
-        "onboarding": "onboarding_agent",
     }
 
     return routing.get(intencion, "chat_agent")
@@ -89,87 +80,29 @@ def route_from_worker(state: AgentState) -> str:
     return "critic"
 
 
-def _plan_state(state: AgentState) -> tuple[list, int, str, dict]:
-    """Helper: extrae pasos, current_step, plan_status y el plan normalizado."""
-    plan = normalize_action_plan(state.get("action_plan"))
-    if not plan:
-        return [], 0, "unknown", None
-    # El contador de iteraciones puede venir en state o en el propio plan.
-    plan["executor_iterations"] = max(plan.get("executor_iterations", 0), state.get("executor_iterations", 0))
-    return plan.get("steps", []), plan.get("current_step", 0), plan.get("plan_status", "in_progress"), plan
-
-
 def route_from_planner(state: AgentState) -> str:
     """Edge condicional: decide si una accion requiere HITL o puede ejecutarse directo.
 
     - Si action_plan no existe, termina.
-    - Si el paso actual está pendiente, pausa para HITL.
-    - Si es low/medium aprobado/no requerido, ejecuta.
+    - Si risk_level es 'high', pausa para revision humana.
+    - Si es 'low'/'medium', ejecuta directamente.
     """
-    steps, current, status, _ = _plan_state(state)
-    if not steps or status in ("failed", "rejected", "completed"):
-        return END
-    if current >= len(steps):
+    action_plan = state.get("action_plan")
+    if not action_plan:
         return END
 
-    step = steps[current]
-    if step.get("execution_status") != "succeeded" and step.get("approval_status") == "pending":
+    risk_level = action_plan.get("risk_level", "low")
+    if risk_level == "high":
         return "hitl_review"
     return "action_executor"
 
 
-def route_from_executor(state: AgentState) -> str:
-    """Edge condicional despues del executor multi-paso.
-
-    - Si el plan terminó/falló/rechazado: END.
-    - Si se excede el límite de iteraciones: END.
-    - Si el paso actual está pendiente: hitl_review.
-    - Si hay pasos ejecutables: loop a action_executor.
-    """
-    from src.config import get_settings
-
-    steps, current, status, plan = _plan_state(state)
-    if not steps or status in ("failed", "rejected", "completed"):
-        return END
-    if current >= len(steps):
-        return END
-
-    # Guarda anti-loop: si el contador de iteraciones supera el máximo, cortar.
-    max_steps = get_settings().max_action_plan_steps
-    if plan and plan.get("executor_iterations", 0) > max_steps + 1:
-        return END
-
-    step = steps[current]
-    if step.get("execution_status") != "succeeded" and step.get("approval_status") == "pending":
-        return "hitl_review"
-    if step.get("approval_status") in ("approved", "not_required"):
-        return "action_executor"
-    return END
-
-
 def route_from_hitl(state: AgentState) -> str:
     """Edge condicional despues de HITL: ejecuta si fue aprobada, termina si fue rechazada."""
-    steps, current, status, _ = _plan_state(state)
-    if not steps or status in ("failed", "rejected", "completed"):
-        return END
-    if current >= len(steps):
-        return END
-
-    step = steps[current]
-    if step.get("approval_status") == "approved":
+    action_plan = state.get("action_plan")
+    if action_plan and action_plan.get("approval_status") == "approved":
         return "action_executor"
     return END
-
-
-def route_from_onboarding(state: AgentState) -> str:
-    """Edge condicional para el onboarding agent.
-
-    - Si generó un action_plan (alta), reusa la misma lógica de route_from_planner.
-    - Si es una consulta, pasa por el crítico.
-    """
-    if state.get("intencion") == "accion" and state.get("action_plan"):
-        return route_from_planner(state)
-    return "critic"
 
 
 def route_from_critic(state: AgentState) -> str:
@@ -186,7 +119,7 @@ def route_from_critic(state: AgentState) -> str:
 
     # HITL solo para acciones con action_plan.
     # RAG/chat/datos con baja confianza terminan con la mejor respuesta disponible.
-    if requires_human and intencion in ("accion", "onboarding") and state.get("action_plan"):
+    if requires_human and intencion == "accion" and state.get("action_plan"):
         return "hitl_review"
 
     # Si la confianza es alta, la respuesta es buena
@@ -200,19 +133,14 @@ def route_from_critic(state: AgentState) -> str:
     # Para acciones, si ya se ejecutaron no las re-lanzamos (evita duplicar side effects).
     if intencion == "accion":
         action_plan = state.get("action_plan")
-        if action_plan:
-            plan = normalize_action_plan(action_plan)
-            if plan.get("plan_status") == "in_progress":
-                return "action_executor"
-            if plan.get("execution_status") == "succeeded":
-                return "action_executor"
+        if action_plan and action_plan.get("execution_status") == "succeeded":
+            return "action_executor"
 
     routing = {
         "rag": "rag_agent",
         "datos": "data_agent",
         "accion": "action_planner",
         "chat": "chat_agent",
-        "onboarding": "onboarding_agent",
     }
 
     return routing.get(intencion, "chat_agent")
@@ -241,7 +169,6 @@ def build_graph(checkpointer=None):
     graph.add_node("chat_agent", chat_node)
     graph.add_node("critic", critic_node)
     graph.add_node("hitl_review", hitl_node)
-    graph.add_node("onboarding_agent", onboarding_node)
 
     # 3. Anadir edges
     # START -> security
@@ -266,7 +193,6 @@ def build_graph(checkpointer=None):
             "data_agent": "data_agent",
             "action_planner": "action_planner",
             "chat_agent": "chat_agent",
-            "onboarding_agent": "onboarding_agent",
         },
     )
 
@@ -277,16 +203,6 @@ def build_graph(checkpointer=None):
         "action_planner",
         route_from_planner,
         {
-            "hitl_review": "hitl_review",
-            "action_executor": "action_executor",
-            END: END,
-        },
-    )
-    graph.add_conditional_edges(
-        "onboarding_agent",
-        route_from_onboarding,
-        {
-            "critic": "critic",
             "hitl_review": "hitl_review",
             "action_executor": "action_executor",
             END: END,
@@ -310,7 +226,6 @@ def build_graph(checkpointer=None):
             "data_agent": "data_agent",
             "action_planner": "action_planner",
             "chat_agent": "chat_agent",
-            "onboarding_agent": "onboarding_agent",
             "action_executor": "action_executor",
             "hitl_review": "hitl_review",
             END: END,
@@ -327,16 +242,8 @@ def build_graph(checkpointer=None):
         },
     )
 
-    # action_executor -> (condicional) -> loop, hitl o END
-    graph.add_conditional_edges(
-        "action_executor",
-        route_from_executor,
-        {
-            "action_executor": "action_executor",
-            "hitl_review": "hitl_review",
-            END: END,
-        },
-    )
+    # action_executor -> END
+    graph.add_edge("action_executor", END)
 
     # 4. Compilar y devolver
     return graph.compile(checkpointer=checkpointer)

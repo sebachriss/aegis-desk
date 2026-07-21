@@ -210,14 +210,9 @@ def run_single_case(graph, case: dict) -> dict:
         "retries": 0,
     }, config=config)
 
-    # Si el grafo se pausó en HITL, auto-aprobar para evals.
-    # Para planes multi-paso puede haber varios pasos high, por lo que se reanuda
-    # en bucle hasta que no haya más interrupciones.
-    max_resume = 20
-    resume_count = 0
-    while result.get("__interrupt__") and resume_count < max_resume:
+    # Si el grafo se pausó en HITL, auto-aprobar para evals
+    if result.get("__interrupt__"):
         result = graph.invoke(Command(resume="approve"), config=config)
-        resume_count += 1
 
     elapsed = time.time() - start_time
 

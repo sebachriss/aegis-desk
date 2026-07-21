@@ -80,7 +80,7 @@ def judge_response(
     expected_contains: str | None = None,
     should_block: bool = False,
     should_deny: bool = False,
-    expected_source: str | list[str] | None = None,
+    expected_source: str | None = None,
     fuentes: list[dict] | None = None,
 ) -> EvaluacionJuez:
     """Evalúa una respuesta usando el LLM como juez.
@@ -91,8 +91,7 @@ def judge_response(
         expected_contains: Texto que debería aparecer en la respuesta (o None).
         should_block: Si se esperaba que la solicitud fuera bloqueada.
         should_deny: Si se esperaba que el acceso fuera denegado por RBAC.
-        expected_source: Fuente esperada en las fuentes usadas (o None). Puede ser
-            una lista o un string con fuentes separadas por comas.
+        expected_source: Fuente esperada en las fuentes usadas (o None).
         fuentes: Lista de fuentes usadas por el sistema (o None).
 
     Returns:
@@ -100,37 +99,16 @@ def judge_response(
     """
     # Validación determinista de la fuente esperada
     if expected_source and fuentes is not None:
-        if isinstance(expected_source, str) and "," in expected_source:
-            expected_sources = [s.strip() for s in expected_source.split(",")]
-        elif isinstance(expected_source, list):
-            expected_sources = expected_source
-        else:
-            expected_sources = [expected_source]
-
         source_names = {f.get("source", "") for f in fuentes}
-        if not any(
-            _source_matches(exp, src)
-            for exp in expected_sources
-            for src in source_names
-        ):
+        if not any(_source_matches(expected_source, src) for src in source_names):
             return EvaluacionJuez(
                 score=0.0,
                 razon=(
-                    f"Las fuentes esperadas {expected_sources!r} no aparecen "
+                    f"La fuente esperada '{expected_source}' no aparece "
                     f"en las fuentes utilizadas: {sorted(source_names)}"
                 ),
                 categoria="incorrecta",
             )
-
-    # Validación determinista de substring esperado.
-    # Si la respuesta contiene exactamente el texto esperado (case-insensitive),
-    # se considera correcta sin necesidad de llamar al LLM juez.
-    if expected_contains and expected_contains.lower() in response.lower():
-        return EvaluacionJuez(
-            score=1.0,
-            razon=f"La respuesta contiene el texto esperado: '{expected_contains}'.",
-            categoria="correcta",
-        )
 
     llm = get_llm(temperature=0)
     llm_juez = llm.with_structured_output(EvaluacionJuez)

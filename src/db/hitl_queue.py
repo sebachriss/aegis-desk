@@ -76,17 +76,6 @@ def _redact_action_plan(action_plan: dict | None) -> dict | None:
         redacted["arguments"] = {
             k: _redact_argument_value(k, v) for k, v in arguments.items()
         }
-    # Multi-step: redactar argumentos de cada paso
-    steps = redacted.get("steps")
-    if isinstance(steps, list):
-        redacted["steps"] = [
-            {
-                **s,
-                "arguments": {k: _redact_argument_value(k, v) for k, v in s.get("arguments", {}).items()},
-                "reasoning": filter_pii(s.get("reasoning", ""))[0] if isinstance(s.get("reasoning"), str) else s.get("reasoning"),
-            }
-            for s in steps
-        ]
     # El reasoning puede contener datos sensibles del usuario
     if "reasoning" in redacted and isinstance(redacted["reasoning"], str):
         redacted["reasoning"], _ = filter_pii(redacted["reasoning"])

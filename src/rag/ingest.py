@@ -161,7 +161,6 @@ def create_vectorstore(chunks: list[Document]) -> Chroma:
         embedding=embeddings,
         persist_directory=str(CHROMA_DIR),
         collection_name="aegis_docs",
-        collection_metadata={"hnsw:space": "cosine"},
     )
 
     if is_pinecone_configured():
