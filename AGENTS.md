@@ -28,7 +28,7 @@ RAG     Data       Action       Chat
 
 - **Workers**: RAG Agent, Data Agent, Action Agent, Chat Agent.
 - **Modelos**: DeepInfra `DeepSeek-V4-Flash` para workers; Groq `Llama-3.1-8B-Instant` / `Llama-3.3-70b` para supervisor y crítico.
-- **RAG**: `sentence-transformers` local (`all-MiniLM-L6-v2`) + **Supabase pgvector** (`src/db/supabase_vector.py`) con fallback a Chroma local.
+- **RAG**: `sentence-transformers` local (`all-MiniLM-L6-v2`) + BM25 (`src/rag/lexical.py`) con RRF, más reranker cross-encoder (`src/rag/reranker.py`). Fallback a Chroma local. Flags `HYBRID_SEARCH_ENABLED` y `RERANKER_ENABLED` en `src/config.py`.
 - **Datos**: **Supabase PostgreSQL** cuando `DATABASE_URL` está set; SQLite/Chroma como fallback local.
 - **Checkpointer**: `langgraph-checkpoint-postgres` (`PostgresSaver`) con `psycopg[binary]`, con fallback a `langgraph-checkpoint-sqlite`.
 - **HITL Queue**: persistida en PostgreSQL (`src/db/hitl_queue.py`) cuando `DATABASE_URL` está set, con fallback a SQLite.
@@ -125,13 +125,15 @@ python -m src.rag.ingest
 
 ## Estado de verificación final
 
-Tras el cierre del `REMEDIATION_PLAN.md` (2026-07-17):
+Tras el cierre de multi-step/onboarding (2026-07-19):
 
-- `pytest tests/ -q` → 82 passed.
-- `python -m evals.run_evals --save` → 33/33 (100%).
-- `python -m redteam.run_redteam --save` → 36/36 (100%).
-- `python -m compileall -q src evals redteam scripts` OK.
-- `cd frontend && npm run lint && npm run build` OK.
+- `pytest tests/ -q` → 153 passed.
+- `make retrieval-evals` → recall@1 85.71%, recall@3 100%, recall@5 100%, MRR 0.9226.
+- `python -m evals.run_evals --save` → 43/43 (100%).
+- `python -m redteam.run_redteam --save` → 52/52 (100%).
+- `make full` (verify + evals + redteam) OK.
+
+Ver detalles en `PROGRESS.md`.
 
 ## Reglas de debugging
 

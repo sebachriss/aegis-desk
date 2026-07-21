@@ -8,6 +8,8 @@ Flujo:
   5. Le pide al LLM que responda basandose en los chunks, con citas
 """
 
+from pathlib import Path
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.llm.providers import get_llm
@@ -28,21 +30,28 @@ Documentos proporcionados:
 {contexto}
 """
 
-# Fuentes permitidas en el contexto RAG
-_ALLOWED_SOURCES = {
-    "politica_rrhh.md",
-    "manual_it.md",
-    "faq.md",
-}
+_DOCUMENTS_DIR = Path(__file__).parent / "documents"
+
+
+def _load_allowed_sources() -> set[str]:
+    """Carga los nombres de todos los documentos .md disponibles."""
+    if not _DOCUMENTS_DIR.exists():
+        return set()
+    return {p.name for p in _DOCUMENTS_DIR.glob("*.md")}
+
+
+# Fuentes permitidas en el contexto RAG (actualizado automáticamente con el corpus)
+_ALLOWED_SOURCES = _load_allowed_sources()
 
 _NO_INFO_ANSWER = "No tengo información suficiente para responder eso."
 
 
 def _source_is_valid(source: str) -> bool:
-    """Acepta únicamente fuentes .md conocidas o resultados de aegis.db."""
+    """Acepta fuentes .md conocidas (con o sin sección) o resultados de aegis.db."""
     if not isinstance(source, str):
         return False
-    base = source.split("/")[-1]
+    # La Fase 5 añade secciones: "doc.md § Sección"
+    base = source.split(" § ")[0].split("/")[-1]
     if base in _ALLOWED_SOURCES:
         return True
     if source.startswith("aegis.db"):

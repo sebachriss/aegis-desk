@@ -64,24 +64,42 @@ def _sanitize_action_plan(action_plan: dict | None) -> dict | None:
     plan = dict(action_plan)
     args = plan.get("arguments")
     if isinstance(args, dict):
-        sanitized = {}
-        for k, v in args.items():
-            key_lower = k.lower()
-            if key_lower in {"password", "token", "api_key", "apikey", "secret", "passwd", "cuerpo", "asunto"}:
-                sanitized[k] = "***"
-            elif plan.get("tool_name") == "enviar_email" and key_lower != "para":
-                sanitized[k] = "***"
-            elif isinstance(v, str):
-                sanitized[k], _ = filter_pii(v)
-            else:
-                sanitized[k] = v
-        plan["arguments"] = sanitized
+        plan["arguments"] = _sanitize_arguments(plan.get("tool_name"), args)
+
+    # Multi-step: redactar argumentos de cada paso
+    steps = plan.get("steps")
+    if isinstance(steps, list):
+        sanitized_steps = []
+        for step in steps:
+            s = dict(step)
+            if isinstance(s.get("arguments"), dict):
+                s["arguments"] = _sanitize_arguments(s.get("tool_name"), s["arguments"])
+            if isinstance(s.get("reasoning"), str):
+                s["reasoning"], _ = filter_pii(s["reasoning"])
+            sanitized_steps.append(s)
+        plan["steps"] = sanitized_steps
 
     # Evitar almacenar IDs de usuario en texto plano en traces
     for key in ("requested_by", "approved_by"):
         if plan.get(key):
             plan[key] = _hash_identifier(plan[key])
     return plan
+
+
+def _sanitize_arguments(tool_name: str | None, args: dict) -> dict:
+    """Redacta argumentos sensibles de una tool."""
+    sanitized = {}
+    for k, v in args.items():
+        key_lower = k.lower()
+        if key_lower in {"password", "token", "api_key", "apikey", "secret", "passwd", "cuerpo", "asunto"}:
+            sanitized[k] = "***"
+        elif tool_name == "enviar_email" and key_lower != "para":
+            sanitized[k] = "***"
+        elif isinstance(v, str):
+            sanitized[k], _ = filter_pii(v)
+        else:
+            sanitized[k] = v
+    return sanitized
 
 
 def trace_execution(
