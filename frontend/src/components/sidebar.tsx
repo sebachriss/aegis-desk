@@ -47,7 +47,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-[color,background-color,transform] active:scale-[0.98] ${
                 active
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -89,7 +89,7 @@ export function Sidebar() {
               {user?.role}
             </Badge>
           </div>
-          <Button variant="ghost" size="icon" onClick={logout} className="h-8 w-8">
+          <Button variant="ghost" size="icon" onClick={logout} className="h-10 w-10">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>

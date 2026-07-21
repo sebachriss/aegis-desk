@@ -35,7 +35,7 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-background to-muted/50">
-      <Card className="w-full max-w-md shadow-xl">
+      <Card className="w-full max-w-md">
         <CardHeader className="space-y-3 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10">
             <Shield className="h-7 w-7 text-primary" />
@@ -91,21 +91,21 @@ export default function LoginPage() {
             <div className="space-y-1.5">
               <button
                 onClick={() => fillDemo("ana.garcia", "ana123")}
-                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none transition-colors"
               >
                 <span className="font-mono">ana.garcia</span>
                 <span className="text-muted-foreground">empleado</span>
               </button>
               <button
                 onClick={() => fillDemo("carlos.lopez", "carlos123")}
-                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none transition-colors"
               >
                 <span className="font-mono">carlos.lopez</span>
                 <span className="text-muted-foreground">empleado</span>
               </button>
               <button
                 onClick={() => fillDemo("admin.aegis", "admin123")}
-                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none transition-colors"
               >
                 <span className="font-mono">admin.aegis</span>
                 <span className="text-muted-foreground">admin</span>

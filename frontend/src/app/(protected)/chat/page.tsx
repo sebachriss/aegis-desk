@@ -177,7 +177,7 @@ export default function ChatPage() {
                 <button
                   key={s}
                   onClick={() => setInput(s)}
-                  className="rounded-full border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors"
+                  className="rounded-full border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none transition-[color,background-color,border-color,transform] active:scale-[0.96]"
                 >
                   {s}
                 </button>
