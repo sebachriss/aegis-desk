@@ -23,7 +23,7 @@ from src.config import get_settings
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "aegis.db"
 
 # Tablas permitidas — si no esta aqui, no se puede consultar
-ALLOWED_TABLES = {"empleados", "tickets", "departamentos", "vacaciones_saldo", "vacaciones_solicitudes"}
+ALLOWED_TABLES = {"empleados", "tickets", "departamentos", "vacaciones_saldo", "vacaciones_solicitudes", "accesos"}
 
 # Columnas sensibles que se redactan por defecto en los resultados
 SENSITIVE_COLUMNS = {"email", "salario"}
@@ -95,6 +95,15 @@ def _init_db():
             created_at TEXT,
             motivo TEXT,
             idempotency_key TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS accesos (
+            id INTEGER PRIMARY KEY,
+            email TEXT,
+            sistema TEXT,
+            estado TEXT,
+            otorgado_por TEXT,
+            created_at TEXT
         );
     """)
 

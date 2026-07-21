@@ -1,3 +1,23 @@
+## 2026-07-19 — Multi-step action agent, onboarding agent y make full
+
+**Objetivo:** cerrar la implementación de planificación/ejecución multi-paso, HITL por paso y el onboarding agent, y pasar `make full`.
+
+- **`src/agents/action_agent.py`**: planner y executor soportan `ActionPlan` con múltiples `ActionStep`s, `depends_on_previous`, `risk_level` y `idempotency_key`. Se añade `_detect_mass_ticket_creation` para rechazar creación masiva de tickets.
+- **`src/agents/hitl_node.py`**: pausa por cada paso `high`, gestiona `approve`/`reject`, resume con `Command` y actualiza `plan_status`.
+- **`src/agents/onboarding_agent.py`**: genera plan determinista de 3 pasos (ticket IT, `crear_accesos`, email bienvenida), restringe el alta a `admin` y rechaza dominios no corporativos.
+- **`src/api/streaming.py`**: emite eventos `interrupt` y `done` con `requires_hitl` y `plan_status`.
+- **`evals/run_evals.py`**: bucle de auto-aprobar HITL para planes multi-paso.
+- **`evals/judges.py`**: shortcut determinista por substring esperado (`expected_contains`).
+- **`redteam/attacks/payloads.json`**: ataque `rt_rl_01` usa payload rápido (`Hola`) para que el rate limiter real se dispare dentro de la ventana.
+
+**Verificación final:**
+- `make test` → 153 passed.
+- `make compile` → OK.
+- `make frontend` → OK (Next.js build).
+- `make evals` → 43/43 (100%).
+- `make redteam` → 52/52 (100%).
+- `make full` → ✅ Toda la verificación pasó.
+
 ## 2026-07-19 — Streaming SSE, métricas ampliadas y dashboard
 
 **Objetivo:** implementar respuestas en streaming y mejorar el dashboard/métricas según `PLAN_STREAMING_DASHBOARD.md`.
@@ -262,3 +282,45 @@
   - README.md actualizado con arquitectura final, todas las fases, resultados, y guía completa
   - Proyecto funcional en producción (10 fases entregadas)
 - **REMEDIACIÓN EN CURSO** — ver `REMEDIATION_PLAN.md` para ítems de seguridad/fiabilidad pendientes
+
+## 2026-07-19 — RAG Avanzado (Hybrid Search + Reranking)
+
+**Objetivo:** ampliar corpus, medir baseline de retrieval, implementar hybrid
+search (BM25 + dense con RRF) y reranking con cross-encoder, y mejorar citas con
+sección del documento.
+
+### Métricas de retrieval
+
+| Config | recall@1 | recall@3 | recall@5 | MRR | Latencia p50 |
+|---|---|---|---|---|---|
+| Baseline (dense, Fase 2) | 57.14% | 75.00% | 78.57% | 0.6619 | — |
+| + Hybrid RRF (Fase 3) | 71.43% | 92.86% | 96.43% | 0.8304 | ~7 ms |
+| + Reranker (Fase 4) | 85.71% | 100.00% | 100.00% | 0.9226 | ~36 ms* |
+
+*La primera consulta carga el modelo cross-encoder (~10 s); las siguientes se
+mantienen por debajo de 300 ms para 10 candidatos.
+
+### Cambios principales
+
+- **`src/rag/lexical.py`**: índice BM25 en memoria con normalización, stemming
+  español y stopwords.
+- **`src/rag/retriever.py`**: pipeline híbrido (10 dense + 10 léxicos), RRF con
+  léxico primero en empates, reranker cross-encoder opcional y fallbacks cuando el
+  reranker es demasiado conservador. El campo `source` de los chunks ahora
+  incluye la sección: `politica_rrhh.md § Horario`.
+- **`src/rag/reranker.py`**: cross-encoder `cross-encoder/ms-marco-MiniLM-L-6-v2`
+  con carga lazy y scores normalizados por sigmoid.
+- **`src/config.py`**: flags `HYBRID_SEARCH_ENABLED` (default `true`) y
+  `RERANKER_ENABLED` (default `true`).
+- **`src/security/prompt_injection.py`**: detecta patrones `UNION ... SELECT` y
+  extracción de columnas `password` para cerrar el ataque `rt_sql_03`.
+- **`tests/test_rag_avanzado.py`**: tests deterministas de RRF, BM25, reranker y
+  retriever híbrido.
+
+### Resultados de suites
+
+- `make test` → 129 passed.
+- `make retrieval-evals` → recall@1 85.71%, recall@3 100%, recall@5 100%, MRR 0.9226.
+- `make evals` → 37/37 (100%).
+- `make redteam` → 46/46 (100%).
+- `make verify` (tests + compileall + frontend lint/build) → OK.
